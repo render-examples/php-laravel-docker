@@ -1,6 +1,6 @@
 FROM wyveo/nginx-php-fpm:php80
 
-COPY . .
+COPY . /usr/share/nginx/html
 
 # Image config
 ENV SKIP_COMPOSER 1
