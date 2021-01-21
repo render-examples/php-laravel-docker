@@ -1,4 +1,4 @@
-FROM richarvey/nginx-php-fpm:1.10.4
+FROM wyveo/nginx-php-fpm:php80
 
 COPY . .
 
