@@ -1,4 +1,4 @@
-# Laravel 5.8 with a Docker PHP Image
+# Laravel 11 with a Docker PHP Image
 
 A demo repo for deploying a Laravel PHP application on [Render](https://render.com) using Docker. You can follow the getting started tutorial [here](https://render.com/docs/deploy-php-laravel-docker).
 
@@ -19,4 +19,4 @@ A demo repo for deploying a Laravel PHP application on [Render](https://render.c
    | `DB_CONNECTION`  | `pgsql` |
    | `APP_KEY`  | Copy the output of `php artisan key:generate --show` |
 
-That's it! Your Laravel 5.8 app will be live on your Render URL as soon as the build finishes. You can test it out by registering and logging in.
+That's it! Your Laravel 11 app will be live on your Render URL as soon as the build finishes. You can test it out by registering and logging in.
