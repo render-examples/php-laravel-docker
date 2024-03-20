@@ -15,8 +15,8 @@ A demo repo for deploying a Laravel PHP application on [Render](https://render.c
 
    | Key             | Value           |
    | --------------- | --------------- |
-   | `DATABASE_URL`  | The **internal connection string** for the database you created above. |
-   | `DB_CONNECTION`  | `pgsql` |
    | `APP_KEY`  | Copy the output of `php artisan key:generate --show` |
+   | `DATABASE_URL`  | The **internal database url** for the database you created above. |
+   | `DB_CONNECTION`  | `pgsql` |
 
 That's it! Your Laravel 11 app will be live on your Render URL as soon as the build finishes. You can test it out by registering and logging in.
