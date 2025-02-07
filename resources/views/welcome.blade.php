@@ -5,6 +5,9 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
 
         <title>Laravel</title>
+   
+        <!-- CSRF Token -->
+        <meta name="csrf-token" content="{{ csrf_token() }}">
 
         <!-- Fonts -->
         <link href="https://fonts.googleapis.com/css?family=Nunito:200,600" rel="stylesheet">
@@ -93,7 +96,16 @@
                     <a href="https://forge.laravel.com">Forge</a>
                     <a href="https://github.com/laravel/laravel">GitHub</a>
                 </div>
+                <div class="hoge">クリックすると青色になります</div>
             </div>
         </div>
+        <script src="{{ mix('js/app.js') }}"></script>
+        <script>
+            $(function(){
+                $(".hoge").click(function(){
+                    $(this).css("background-color", "blue");
+                });
+            });
+        </script>
     </body>
 </html>

@@ -1,0 +1,28 @@
+<mxfile host="65bd71144e">
+    <diagram id="7UPeduvugmt09UL1mUPs" name="テストE-R図">
+        <mxGraphModel dx="965" dy="468" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="49" value="User テーブル" style="swimlane;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;rounded=1;fontSize=14;fontStyle=0;strokeWidth=2;resizeParent=0;resizeLast=1;shadow=0;dashed=0;align=center;fillColor=#6666FF;" parent="1" vertex="1">
+                    <mxGeometry x="100" y="640" width="250" height="207.5" as="geometry"/>
+                </mxCell>
+                <mxCell id="50" value="ユーザーID（PK）&#10;名前&#10;メールアドレス&#10;電子メールアドレスが確認された日時&#10;パスワード&#10;rememberToken&#10;作成日時&#10;更新日時&#10;" style="align=left;strokeColor=none;fillColor=none;spacingLeft=4;fontSize=12;verticalAlign=top;resizable=0;rotatable=0;part=1;" parent="49" vertex="1">
+                    <mxGeometry y="30" width="250" height="177.5" as="geometry"/>
+                </mxCell>
+                <mxCell id="54" value="" style="edgeStyle=entityRelationEdgeStyle;fontSize=12;html=1;endArrow=ERzeroToMany;startArrow=ERmandOne;" parent="1" edge="1">
+                    <mxGeometry width="100" height="100" relative="1" as="geometry">
+                        <mxPoint x="350" y="760" as="sourcePoint"/>
+                        <mxPoint x="450" y="660" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="55" value="Post テーブル" style="swimlane;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;rounded=1;fontSize=14;fontStyle=0;strokeWidth=2;resizeParent=0;resizeLast=1;shadow=0;dashed=0;align=center;fillColor=#6666FF;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="550" width="250" height="210" as="geometry"/>
+                </mxCell>
+                <mxCell id="56" value="投稿ID（FK）&#10;..&#10;" style="align=left;strokeColor=none;fillColor=none;spacingLeft=4;fontSize=12;verticalAlign=top;resizable=0;rotatable=0;part=1;" parent="55" vertex="1">
+                    <mxGeometry y="30" width="250" height="180" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>
