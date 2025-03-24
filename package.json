@@ -25,5 +25,8 @@
     },
     "resolutions": {
         "laravel-mix/webpack/terser-webpack-plugin/cacache/ssri": "^6.0.2"
+    },
+    "dependencies": {
+        "slick-carousel": "^1.8.1"
     }
 }
