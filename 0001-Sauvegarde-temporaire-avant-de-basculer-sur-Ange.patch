@@ -1,0 +1,3070 @@
+From 20917696be747d2859d3554d16343d2b9b895897 Mon Sep 17 00:00:00 2001
+From: allmight777 <agoliganange15@gmail.com>
+Date: Wed, 9 Jul 2025 17:43:07 +0100
+Subject: [PATCH] Sauvegarde temporaire avant de basculer sur Ange
+
+---
+ .../Controllers/Admin/AdminController.php     | 137 +++++-----
+ app/Http/Controllers/BulletinController.php   | 106 +-------
+ app/Http/Controllers/ProfesseurController.php |  36 ---
+ .../Controllers/ReclamationController.php     | 257 ++++++++++++++----
+ app/Models/AnneeAcademique.php                |   5 +
+ app/Models/Bulletin.php                       |   5 +-
+ app/Models/Matiere.php                        |  12 +
+ app/Models/Note.php                           |   5 +
+ app/Models/Reclamation.php                    |  48 +++-
+ .../AdminReclamationNotification.php          |  54 ++++
+ .../NewReclamationNotification.php            |  42 +++
+ .../NoteModificationNotification.php          |  54 ++++
+ .../ReclamationEnvoyeeNotification.php        |  32 +++
+ app/Notifications/ReclamationNotification.php |  25 +-
+ .../ReclamationResponseNotification.php       |  54 ++++
+ ...07_01_112703_create_reclamations_table.php |  34 +++
+ ...dd_reponse_admin_to_reclamations_table.php |  23 ++
+ ...0933_add_note_id_to_reclamations_table.php |  27 ++
+ ...e_note_id_non_nullable_in_reclamations.php |  26 ++
+ ...dd_professeur_id_to_reclamations_table.php |  29 ++
+ ...dify_bulletin_id_in_reclamations_table.php |  34 +++
+ resources/views/admin/dashboard.blade.php     |  50 ++--
+ .../admin/professeurs/affectation.blade.php   | 128 ++++++---
+ .../views/admin/reclamations/index.blade.php  | 154 +++++++++++
+ resources/views/bulletin/bulletin.blade.php   | 101 ++++---
+ resources/views/layouts/admin.blade.php       |  11 +-
+ .../views/professeur/dashboard.blade.php      |  72 +++--
+ resources/views/professeur/eleves.blade.php   |  19 +-
+ .../professeur/reclamations/create.blade.php  | 107 ++++++++
+ .../professeur/reclamations/suivi.blade.php   | 147 ++++++++++
+ .../views/reclamations/confirmation.blade.php |  13 +
+ resources/views/reclamations/create.blade.php | 170 ++++++++++--
+ resources/views/reclamations/index.blade.php  | 213 +++++++++++++--
+ .../views/reclamations/professeur.blade.php   |  25 ++
+ .../vendor/notifications/email.blade.php      |  58 ++++
+ routes/web.php                                |  21 +-
+ 36 files changed, 1836 insertions(+), 498 deletions(-)
+ create mode 100644 app/Notifications/AdminReclamationNotification.php
+ create mode 100644 app/Notifications/NewReclamationNotification.php
+ create mode 100644 app/Notifications/NoteModificationNotification.php
+ create mode 100644 app/Notifications/ReclamationEnvoyeeNotification.php
+ create mode 100644 app/Notifications/ReclamationResponseNotification.php
+ create mode 100644 database/migrations/2025_07_01_112703_create_reclamations_table.php
+ create mode 100644 database/migrations/2025_07_02_153551_add_reponse_admin_to_reclamations_table.php
+ create mode 100644 database/migrations/2025_07_03_100933_add_note_id_to_reclamations_table.php
+ create mode 100644 database/migrations/2025_07_03_132002_make_note_id_non_nullable_in_reclamations.php
+ create mode 100644 database/migrations/2025_07_09_150237_add_professeur_id_to_reclamations_table.php
+ create mode 100644 database/migrations/2025_07_09_150321_modify_bulletin_id_in_reclamations_table.php
+ create mode 100644 resources/views/admin/reclamations/index.blade.php
+ create mode 100644 resources/views/professeur/reclamations/create.blade.php
+ create mode 100644 resources/views/professeur/reclamations/suivi.blade.php
+ create mode 100644 resources/views/reclamations/confirmation.blade.php
+ create mode 100644 resources/views/reclamations/professeur.blade.php
+ create mode 100644 resources/views/vendor/notifications/email.blade.php
+
+diff --git a/app/Http/Controllers/Admin/AdminController.php b/app/Http/Controllers/Admin/AdminController.php
+index a01c877..ed3b558 100644
+--- a/app/Http/Controllers/Admin/AdminController.php
++++ b/app/Http/Controllers/Admin/AdminController.php
+@@ -169,11 +169,11 @@ private function fullName(User $user)
+     }
+ 
+     // Gestion des affectations professeurs/classes/matières par année scolaires
+-    public function affectation($id)
+-    {
+ 
+-        // afficher les classes et matières à affecter à un professeur donné.
++    // affectation profs
+ 
++    public function affectation($id)
++    {
+         $professeur = User::findOrFail($id);
+         $annees = AnneeAcademique::all();
+ 
+@@ -189,7 +189,11 @@ public function affectation($id)
+             return $classe;
+         });
+ 
+-        return view('admin.professeurs.affectation', compact('professeur', 'annees', 'classes'));
++        $affectations = Affectation::with(['classe', 'matiere'])
++            ->where('professeur_id', $professeur->id)
++            ->get();
++
++        return view('admin.professeurs.affectation', compact('professeur', 'annees', 'classes', 'affectations'));
+     }
+ 
+     // affectation profs
+@@ -234,7 +238,7 @@ public function storeAffectation(Request $request, $id)
+             return redirect()->back()->withErrors($errors);
+         }
+ 
+-        return redirect()->route('professeurs.index')->with('success', 'Affectations enregistrées');
++        return redirect()->route('admin.professeurs.index')->with('success', 'Affectations enregistrées');
+     }
+ 
+     // Update affectation
+@@ -242,19 +246,16 @@ public function editAffectation($id)
+     {
+         $professeur = User::findOrFail($id);
+ 
+-        // Récupérer toutes les années académiques
+         $annees = AnneeAcademique::all();
+ 
+-        // Récupérer les affectations groupées par année scolaire pour ce professeur
++        // Pas de groupBy, juste récupérer les affectations
+         $affectations = Affectation::with(['classe', 'matiere'])
+             ->where('professeur_id', $professeur->id)
+-            ->get()
+-            ->groupBy('annee_academique_id');
++            ->get();
+ 
+-        // Sélectionner une année par défaut (la plus récente, ou la première dans la liste)
+         $anneeSelectionneeId = $annees->last()?->id ?? $annees->first()?->id;
+ 
+-        return view('admin.professeurs.editAffectation', compact(
++        return view('admin.professeurs.affectation', compact(
+             'professeur',
+             'annees',
+             'affectations',
+@@ -265,34 +266,51 @@ public function editAffectation($id)
+     public function updateAffectation(Request $request, $id)
+     {
+         $professeur = User::findOrFail($id);
+-        $annee_id = $request->annee_academique_id;
+-
+-        // Supprimer toutes les affectations existantes pour ce prof et cette année
+-        Affectation::where('professeur_id', $professeur->id)
+-            ->where('annee_academique_id', $annee_id)
+-            ->delete();
+ 
++        // Récupérer toutes les affectations envoyées
+         $affectations = $request->input('affectations', []);
+ 
++        // Tableau pour stocker les erreurs
++        $errors = [];
++
++        // Supprimer toutes les affectations existantes pour ce professeur
++        Affectation::where('professeur_id', $professeur->id)->delete();
++
++        // Recréer les affectations pour les matières cochées
+         foreach ($affectations as $combo) {
+-            [$classe_id, $matiere_id] = explode('-', $combo);
++            [$annee_id, $classe_id, $matiere_id] = explode('-', $combo);
+ 
+-            // Vérifier si cette matière est déjà affectée à un autre prof pour cette année
+-            $exists = Affectation::where('classe_id', $classe_id)
++            // Vérifier si cette matière est déjà affectée à un autre professeur
++            $exists = Affectation::where('annee_academique_id', $annee_id)
++                ->where('classe_id', $classe_id)
+                 ->where('matiere_id', $matiere_id)
+-                ->where('annee_academique_id', $annee_id)
++                ->where('professeur_id', '!=', $professeur->id)
+                 ->exists();
+ 
+-            if (! $exists) {
++            if ($exists) {
++                $matiere = Matiere::find($matiere_id);
++                $classe = Classe::find($classe_id);
++                $annee = AnneeAcademique::find($annee_id);
++
++                // Ajouter un message d'erreur si la matière est déjà affectée
++                $errors[] = "La matière « {$matiere->nom} » est déjà attribuée à un autre professeur pour la classe « {$classe->nom} » pour l'année scolaire « {$annee->libelle} ».";
++            } else {
++                // Créer une nouvelle affectation si elle n'existe pas déjà
+                 Affectation::create([
+                     'professeur_id' => $professeur->id,
++                    'annee_academique_id' => $annee_id,
+                     'classe_id' => $classe_id,
+                     'matiere_id' => $matiere_id,
+-                    'annee_academique_id' => $annee_id,
+                 ]);
+             }
+         }
+ 
++        // Si des erreurs existent, renvoyer à la page précédente avec les messages d'erreur
++        if (count($errors) > 0) {
++            return redirect()->back()->withErrors($errors);
++        }
++
++        // Sinon, rediriger avec un message de succès
+         return redirect()->route('professeurs.index')->with('success', 'Affectations mises à jour avec succès.');
+     }
+ 
+@@ -508,8 +526,6 @@ public function showClasses()
+         return view('admin.classes.index', compact('classes', 'annee'));
+     }
+ 
+-
+-    
+     public function showEleves($anneeId, $classeId)
+     {
+         $classe = Classe::findOrFail($classeId);
+@@ -540,7 +556,6 @@ public function migrationPage($anneeId, $classeId)
+         return view('admin.classes.migration', compact('classe', 'annee', 'eleves', 'autresClasses'));
+     }
+ 
+-
+     public function migrerEleves(Request $request, $anneeId, $classeId)
+     {
+         $request->validate([
+@@ -562,7 +577,6 @@ public function showResultats()
+         return view('admin.resultats.annees', compact('annees'));
+     }
+ 
+-
+     public function showClassesForAnnee($anneeId)
+     {
+         $annee = AnneeAcademique::findOrFail($anneeId);
+@@ -572,42 +586,41 @@ public function showClassesForAnnee($anneeId)
+     }
+ 
+     public function showElevesForResultats($anneeId, $classeId)
+-{
+-    $classe = Classe::findOrFail($classeId);
+-    $annee = AnneeAcademique::findOrFail($anneeId);
+-    
+-    // Lire la valeur du seuil depuis l'URL ou utiliser 10 par défaut
+-    $seuilAdmission = request()->query('seuil', 10);
+-
+-    // Élèves admis
+-    $elevesAdmis = Eleve::where('classe_id', $classeId)
+-        ->where('annee_academique_id', $anneeId)
+-        ->whereHas('bulletins', function($q) use ($seuilAdmission) {
+-            $q->where('moyenne_generale', '>=', $seuilAdmission);
+-        })
+-        ->with(['user', 'bulletins' => function($q) {
+-            $q->latest('periode_id')->limit(1);
+-        }])
+-        ->get()
+-        ->each(function($eleve) {
+-            $eleve->moyenne_generale = $eleve->bulletins->first()->moyenne_generale ?? 'N/A';
+-        });
++    {
++        $classe = Classe::findOrFail($classeId);
++        $annee = AnneeAcademique::findOrFail($anneeId);
+ 
+-    // Élèves refusés
+-    $elevesRefuses = Eleve::where('classe_id', $classeId)
+-        ->where('annee_academique_id', $anneeId)
+-        ->whereHas('bulletins', function($q) use ($seuilAdmission) {
+-            $q->where('moyenne_generale', '<', $seuilAdmission);
+-        })
+-        ->with(['user', 'bulletins' => function($q) {
+-            $q->latest('periode_id')->limit(1);
+-        }])
+-        ->get()
+-        ->each(function($eleve) {
+-            $eleve->moyenne_generale = $eleve->bulletins->first()->moyenne_generale ?? 'N/A';
+-        });
++        // Lire la valeur du seuil depuis l'URL ou utiliser 10 par défaut
++        $seuilAdmission = request()->query('seuil', 10);
+ 
+-    return view('admin.resultats.eleves', compact('classe', 'annee', 'elevesAdmis', 'elevesRefuses', 'seuilAdmission'));
+-}
++        // Élèves admis
++        $elevesAdmis = Eleve::where('classe_id', $classeId)
++            ->where('annee_academique_id', $anneeId)
++            ->whereHas('bulletins', function ($q) use ($seuilAdmission) {
++                $q->where('moyenne_generale', '>=', $seuilAdmission);
++            })
++            ->with(['user', 'bulletins' => function ($q) {
++                $q->latest('periode_id')->limit(1);
++            }])
++            ->get()
++            ->each(function ($eleve) {
++                $eleve->moyenne_generale = $eleve->bulletins->first()->moyenne_generale ?? 'N/A';
++            });
+ 
++        // Élèves refusés
++        $elevesRefuses = Eleve::where('classe_id', $classeId)
++            ->where('annee_academique_id', $anneeId)
++            ->whereHas('bulletins', function ($q) use ($seuilAdmission) {
++                $q->where('moyenne_generale', '<', $seuilAdmission);
++            })
++            ->with(['user', 'bulletins' => function ($q) {
++                $q->latest('periode_id')->limit(1);
++            }])
++            ->get()
++            ->each(function ($eleve) {
++                $eleve->moyenne_generale = $eleve->bulletins->first()->moyenne_generale ?? 'N/A';
++            });
++
++        return view('admin.resultats.eleves', compact('classe', 'annee', 'elevesAdmis', 'elevesRefuses', 'seuilAdmission'));
++    }
+ }
+diff --git a/app/Http/Controllers/BulletinController.php b/app/Http/Controllers/BulletinController.php
+index b72e125..1ac1afc 100644
+--- a/app/Http/Controllers/BulletinController.php
++++ b/app/Http/Controllers/BulletinController.php
+@@ -3,9 +3,9 @@
+ namespace App\Http\Controllers;
+ use Barryvdh\DomPDF\Facade\Pdf;
+ use Illuminate\Http\Request;
+-use Illuminate\Support\Facades\Validator; 
++use Illuminate\Support\Facades\Validator;
+ use App\Models\Note;
+-use App\Models\Eleve; 
++use App\Models\Eleve;
+ use App\Models\Bulletin;
+ use App\Models\AnneeAcademique;
+ use App\Models\PeriodeAcademique;
+@@ -73,102 +73,6 @@ public function editUser(User $user)
+         return view('admin.users.editeleve', compact('user'));
+     }
+ 
+-/*public function downloadBulletin($annee_academique_id)
+-{
+-    $eleve = auth()->user()->eleve;
+-    $annee = AnneeAcademique::find($annee_academique_id);
+-
+-    // Récupere les bulletins avec les relations
+-    $bulletins = Bulletin::where('eleve_id', $eleve->id)
+-        ->whereHas('periode', function($query) use ($annee_academique_id) {
+-            $query->where('annee_academique_id', $annee_academique_id);
+-        })
+-        ->with(['periode', 'matiere'])
+-        ->get();
+-
+-    // Récupere l'effectif de la classe
+-    $effectifClasse = Eleve::where('classe_id', $eleve->classe_id)->count();
+-
+-    // Initialiser les variables
+-    $notes = [];
+-    $moyennesPeriodes = [];
+-    $totalPeriodes = 0;
+-    $sommeMoyennesPeriodes = 0;
+-
+-    foreach ($bulletins as $bulletin) {
+-        $periodeId = $bulletin->periode_id;
+-        $matiereId = $bulletin->matiere_id;
+-        $devoir1 = $devoirs->where('nom_evaluation', 'devoir1')->first()->valeur ?? 0;
+-        $devoir2 = $devoirs->where('nom_evaluation', 'devoir2')->first()->valeur ?? 0;
+-        // Récupére les notes
+-        $notesMatiere = Note::where('eleve_id', $eleve->id)
+-            ->where('periode_id', $periodeId)
+-            ->where('matiere_id', $matiereId)
+-            ->get();
+-
+-        // Organise les notes par type
+-        $interros = $notesMatiere->where('type_evaluation', 'interrogation');
+-        $devoirs = $notesMatiere->where('type_evaluation', 'devoir');
+-
+-        // Calcul des moyennes
+-        $moyInterros = $interros->avg('valeur');
+-        $moyDevoirs = $devoirs->avg('valeur');
+-        $coefficient = $bulletin->matiere->coefficient ?? 1;
+-        $moyenneCoeff= ($moyInterros + $devoir1 + $devoir2) / 3 * $coefficient;
+-
+-        // Stocke les notes pour l'affichage
+-        $notes[$periodeId][$matiereId] = [
+-            'interro1' => $interros->where('nom_evaluation', 'interro1')->first()->valeur ?? null,
+-            'interro2' => $interros->where('nom_evaluation', 'interro2')->first()->valeur ?? null,
+-            'interro3' => $interros->where('nom_evaluation', 'interro3')->first()->valeur ?? null,
+-            'devoir1' => $devoirs->where('nom_evaluation', 'devoir1')->first()->valeur ?? null,
+-            'devoir2' => $devoirs->where('nom_evaluation', 'devoir2')->first()->valeur ?? null,
+-            'moy_interros' => $moyInterros,
+-            'moy_devoirs' => $moyDevoirs,
+-            'moyenne' =>($moyInterros + $devoir1 + $devoir2) / 3,
+-            'coefficient' => $coefficient,
+-            'moyenne_coeff' => $moyenneCoeff
+-        ];
+-
+-        // Calcul pour la moyenne annuelle
+-
+-
+-       /* if (!isset($moyennesPeriodes[$periodeId])) {
+-            $moyennesPeriodes[$periodeId] = $bulletin->moyenne_periodique;
+-            $sommeMoyennesPeriodes += $bulletin->moyenne_periodique;
+-            $totalPeriodes++;
+-        }
+-         if (!isset($moyennesPeriodes[$periodeId]['total_coeff'])) {
+-            $moyennesPeriodes[$periodeId] = [
+-                'total_coeff' => 0,
+-                'total_moy_coeff' => 0
+-            ];
+-        }
+-        
+-        $moyennesPeriodes[$periodeId]['total_coeff'] += $coefficient;
+-        $moyennesPeriodes[$periodeId]['total_moy_coeff'] += $moyenneCoeff;
+-    }
+-
+-    $rangAnnuel = Bulletin::where('eleve_id', $eleve->id)
+-        ->whereHas('periode', function($query) use ($annee_academique_id) {
+-            $query->where('annee_academique_id', $annee_academique_id);
+-        })
+-        ->avg('rang_periodique'); 
+-    $moyenneAnnuelle = $totalPeriodes > 0 ? $sommeMoyennesPeriodes / $totalPeriodes : 0;
+-
+-    $pdf = Pdf::loadView('bulletin.pdf', [
+-        'eleve' => $eleve,
+-        'annee' => $annee,
+-        'bulletins' => $bulletins,
+-        'notes' => $notes,
+-        'rangAnnuel' => round($rangAnnuel),
+-        'moyenneAnnuelle' => round($moyenneAnnuelle, 2),
+-        'effectifClasse' => $effectifClasse,
+-        'groupes' => $bulletins->groupBy('periode_id')
+-    ]);
+-
+-    return $pdf->download("bulletin_{$eleve->user->nom}_{$annee->libelle}.pdf");
+-}*/
+ public function downloadBulletin($annee_academique_id)
+ {
+     $eleve = auth()->user()->eleve;
+@@ -194,7 +98,7 @@ public function downloadBulletin($annee_academique_id)
+     foreach ($bulletins as $bulletin) {
+         $periodeId = $bulletin->periode_id;
+         $matiereId = $bulletin->matiere_id;
+-        
++
+         // Récupérer les notes
+         $notesMatiere = Note::where('eleve_id', $eleve->id)
+             ->where('periode_id', $periodeId)
+@@ -209,7 +113,7 @@ public function downloadBulletin($annee_academique_id)
+         $moyInterros = $interros->avg('valeur');
+         $moyDevoirs = $devoirs->avg('valeur');
+         $coefficient = $bulletin->matiere->coefficient ?? 1;
+-        
++
+         // Calcul de la moyenne selon la formule : (moyInterros + devoir1 + devoir2) / 3
+         $devoir1 = $devoirs->where('nom_evaluation', 'devoir1')->first()->valeur ?? 0;
+         $devoir2 = $devoirs->where('nom_evaluation', 'devoir2')->first()->valeur ?? 0;
+@@ -237,7 +141,7 @@ public function downloadBulletin($annee_academique_id)
+                 'total_moy_coeff' => 0
+             ];
+         }
+-        
++
+         $moyennesPeriodes[$periodeId]['total_coeff'] += $coefficient;
+         $moyennesPeriodes[$periodeId]['total_moy_coeff'] += $moyenneCoeff;
+     }
+diff --git a/app/Http/Controllers/ProfesseurController.php b/app/Http/Controllers/ProfesseurController.php
+index 8559d4c..428d01c 100644
+--- a/app/Http/Controllers/ProfesseurController.php
++++ b/app/Http/Controllers/ProfesseurController.php
+@@ -119,44 +119,8 @@ public function elevesParClasse($anneeId, $classeId)
+             'selectedPeriodeId'
+         ));
+     }
+-    
+-   /* public function listeElevesAMigrer($anneeId, $classeId)
+-    {
+-        // Récupération de la classe sans essayer de charger anneeAcademique via la relation
+-        $classe = Classe::findOrFail($classeId);
+-
+-        // Récupération séparée de l'année académique
+-        $annee = AnneeAcademique::findOrFail($anneeId);
+ 
+-        // Le reste de votre méthode reste inchangé
+-        $elevesAdmis = Eleve::where('classe_id', $classeId)
+-            ->where('annee_academique_id', $anneeId)
+-            ->whereHas('bulletins', function ($q) {
+-                $q->where('moyenne_generale', '>=', 10);
+-            })
+-            ->with(['user', 'bulletins' => function ($q) {
+-                $q->latest('periode_id')->limit(1);
+-            }])
+-            ->get()
+-            ->each(function ($eleve) {
+-                $eleve->moyenne_generale = $eleve->bulletins->first()->moyenne_generale ?? 'N/A';
+-            });
+-
+-        $elevesRefuses = Eleve::where('classe_id', $classeId)
+-            ->where('annee_academique_id', $anneeId)
+-            ->whereHas('bulletins', function ($q) {
+-                $q->where('moyenne_generale', '<', 10);
+-            })
+-            ->with(['user', 'bulletins' => function ($q) {
+-                $q->latest('periode_id')->limit(1);
+-            }])
+-            ->get()
+-            ->each(function ($eleve) {
+-                $eleve->moyenne_generale = $eleve->bulletins->first()->moyenne_generale ?? 'N/A';
+-            });
+ 
+-        return view('admin.migration.index', compact('classe', 'annee', 'elevesAdmis', 'elevesRefuses'));
+-    }*/
+ public function listeElevesAMigrer($anneeId, $classeId)
+ {
+     $classe = Classe::findOrFail($classeId);
+diff --git a/app/Http/Controllers/ReclamationController.php b/app/Http/Controllers/ReclamationController.php
+index 885baf3..135f641 100644
+--- a/app/Http/Controllers/ReclamationController.php
++++ b/app/Http/Controllers/ReclamationController.php
+@@ -2,86 +2,247 @@
+ 
+ namespace App\Http\Controllers;
+ 
+-use App\Models\Reclamation;
+-use App\Models\Note;
++use App\Models\Affectation;
++use App\Models\AnneeAcademique;
+ use App\Models\Eleve;
+-use App\Models\User;
+ use App\Models\Matiere;
++use App\Models\Note;
++use App\Models\PeriodeAcademique;
++use App\Models\Professeur;
++use App\Models\Reclamation;
++use App\Models\User;
++use App\Notifications\AdminReclamationNotification;
++use App\Notifications\ReclamationResponseNotification;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\Auth;
+-use App\Notifications\ReclamationNotification;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Log;
+ 
+ class ReclamationController extends Controller
+ {
+-    // ➤ Formulaire de réclamation (étudiant)
+-    public function create()
++    public function create(Eleve $eleve)
+     {
+-        $eleve = Auth::user()->eleve;
+-        $notes = Note::where('eleve_id', $eleve->id)
+-                   ->with('matiere')
+-                   ->get();
+-        return view('reclamations.create', compact('notes'));
++        $professeur = Auth::user()->professeur;
++
++        if (! $professeur) {
++            abort(403, 'Accès réservé aux professeurs');
++        }
++
++        // Récupérer les matières enseignées par ce professeur pour cet élève
++        $matieres = Matiere::whereHas('affectations', function ($query) use ($professeur, $eleve) {
++            $query->where('professeur_id', $professeur->id)
++                ->where('classe_id', $eleve->classe_id);
++        })->get();
++
++        $periodes = PeriodeAcademique::where('annee_academique_id', $eleve->annee_academique_id)->get();
++        $annee = AnneeAcademique::find($eleve->annee_academique_id);
++
++        return view('professeur.reclamations.create', compact('eleve', 'matieres', 'periodes', 'annee'));
+     }
+ 
+-    // ➤ Enregistrement de la réclamation (étudiant)
+     public function store(Request $request)
+     {
+         $request->validate([
+-            'message' => 'required|string|max:1000',
+-            'note_id' => 'required|exists:notes,id',
++            'eleve_id' => 'required|exists:eleves,id',
++            'matiere_id' => 'required|exists:matieres,id',
++            'periode_id' => 'required|exists:periodes_academiques,id',
++            'type_evaluation' => 'required|string|in:interro1,interro2,interro3,devoir1,devoir2',
++            'description' => 'required|string|min:10',
+         ]);
+ 
+-        $note = Note::findOrFail($request->note_id);
++        try {
++            DB::beginTransaction();
+ 
+-        $reclamation = Reclamation::create([
+-            'eleve_id' => Auth::user()->eleve->id,
+-            'professeur_id' => $note->professeur_id,
+-            'message' => $request->message,
+-            'matiere_id' => $note->matiere_id,
+-            'note_id' => $note->id,
+-            'statut' => 'en_attente'
+-        ]);
++            $professeur = Auth::user()->professeur;
++            if (! $professeur) {
++                abort(403, 'Accès réservé aux professeurs');
++            }
++
++            $eleve = Eleve::findOrFail($request->eleve_id);
++
++            // Vérification que le professeur enseigne bien la matière à l'élève
++            $affectation = Affectation::where('professeur_id', $professeur->id)
++                ->where('matiere_id', $request->matiere_id)
++                ->where('classe_id', $eleve->classe_id)
++                ->first();
++
++            if (! $affectation) {
++                abort(403, 'Vous n\'enseignez pas cette matière à cet élève');
++            }
++
++            $typeEvaluationRaw = $request->type_evaluation;
++            $typeMapped = str_starts_with($typeEvaluationRaw, 'interro') ? 'interrogation' : 'devoir';
++
++            // Chercher la note existante
++            $note = Note::where('eleve_id', $eleve->id)
++                ->where('matiere_id', $request->matiere_id)
++                ->where('periode_id', $request->periode_id)
++                ->where('type_evaluation', $typeMapped)
++                ->where('nom_evaluation', $typeEvaluationRaw)
++                ->first();
++
++            if (! $note) {
++                $note = Note::create([
++                    'eleve_id' => $eleve->id,
++                    'matiere_id' => $request->matiere_id,
++                    'periode_id' => $request->periode_id,
++                    'valeur' => 0,
++                    'type_evaluation' => $typeMapped,
++                    'nom_evaluation' => $typeEvaluationRaw,
++                    'is_locked' => true,
++                ]);
++            }
++
++            // Vérifier qu'une réclamation similaire n'existe pas déjà
++            $existingReclamation = Reclamation::where('eleve_id', $eleve->id)
++                ->where('matiere_id', $request->matiere_id)
++                ->where('periode_id', $request->periode_id)
++                ->where('annee_academique_id', $eleve->annee_academique_id)
++                ->where('note_id', $note->id)
++                ->where('type_evaluation', $typeMapped)
++                ->where('type', 'modification_note')
++                ->whereIn('statut', ['nouvelle_admin', 'nouvelle', 'resolue'])
++                ->first();
++
++            if ($existingReclamation) {
++                DB::rollBack();
++
++                return redirect()->route('reclamations.create', ['eleve' => $eleve->id])
++                    ->withErrors(['error' => 'Une réclamation similaire existe déjà pour cette note.'])
++                    ->withInput();
++            }
++
++            // Créer la réclamation avec une valeur NULL pour 'bulletin_id' si nécessaire
++            $reclamation = Reclamation::create([
++                'matiere_id' => $request->matiere_id,
++                'type_evaluation' => $typeMapped,
++                'periode_id' => $request->periode_id,
++                'annee_academique_id' => $eleve->annee_academique_id,
++                'type' => 'modification_note',
++                'description' => $request->description,
++                'statut' => 'nouvelle_admin',
++                'eleve_id' => $eleve->id,
++                'note_id' => $note->id,
++                'professeur_id' => $professeur->id,
++                'bulletin_id' => null,
++                'created_at' => now(),
++                'updated_at' => now(),
++            ]);
++
++            if (! $reclamation) {
++                DB::rollBack();
++
++                return redirect()->route('reclamations.create', ['eleve' => $eleve->id])
++                    ->withErrors(['error' => 'La création de la réclamation a échoué.'])
++                    ->withInput();
++            }
++
++            // Notification admin
++            $admin = User::where('is_admin', 1)->first();
++            if ($admin) {
++                $admin->notify(new AdminReclamationNotification($reclamation));
++            }
+ 
+-        // Envoi d'une notification au professeur concerné
+-        $professeur = User::find($note->professeur_id);
+-        if ($professeur) {
+-            $professeur->notify(new ReclamationNotification($reclamation));
++            DB::commit();
++
++            return redirect()->route('reclamations.create', ['eleve' => $eleve->id])
++                ->with('success', 'Réclamation envoyée à l\'administration avec succès');
++
++        } catch (\Exception $e) {
++            DB::rollBack();
++            Log::error('Erreur création réclamation: '.$e->getMessage());
++
++            return redirect()->route('reclamations.create', ['eleve' => $eleve->id])
++                ->withErrors(['error' => 'Une erreur est survenue: '.$e->getMessage()])
++                ->withInput();
++        }
++    }
++
++    public function professeurIndex()
++    {
++        $professeur = Auth::user()->professeur;
++
++        if (! $professeur) {
++            abort(403, 'Accès réservé aux professeurs');
+         }
+ 
+-        return redirect()->route('reclamations.create')->with('success', 'Réclamation envoyée avec succès !');
++        $reclamations = Reclamation::where('professeur_id', $professeur->id)
++            ->with(['eleve.user', 'matiere', 'periode', 'note'])
++            ->latest()
++            ->paginate(10);
++
++        return view('professeur.reclamations.create', compact('reclamations'));
+     }
+ 
+-    // ➤ Liste des réclamations pour professeurs ou admin
+-    public function index()
++    public function suiviReclamations($eleve_id = null)
+     {
+-        $user = Auth::user();
++        $professeur = Auth::user()->professeur;
++
++        if (! $professeur) {
++            abort(403, 'Accès réservé aux professeurs');
++        }
+ 
+-        $reclamations = Reclamation::query()
+-            ->when($user->hasRole('professeur'), function($q) use ($user) {
+-                $q->where('professeur_id', $user->id);
+-            })
+-            ->with(['eleve.user', 'matiere', 'note'])
++        $query = Reclamation::where('professeur_id', $professeur->id)
++            ->with(['eleve.user', 'matiere', 'periode', 'note'])
++            ->latest();
++
++        // Si un ID d'élève est fourni
++        if ($eleve_id) {
++            $query->where('eleve_id', $eleve_id);
++        }
++
++        // Récupérer les réclamations
++        $reclamations = $query->get();
++
++        // Récupérer la liste des élèves
++        $eleves = Eleve::where('classe_id', $professeur->classe_id)->get();
++
++        return view('professeur.reclamations.suivi', compact('reclamations', 'eleves'));
++    }
++
++    public function adminIndex()
++    {
++        $reclamations = Reclamation::where('statut', 'nouvelle_admin')
++            ->with(['eleve.user', 'matiere', 'periode', 'note', 'professeur.user'])
+             ->orderBy('created_at', 'desc')
+             ->paginate(10);
+ 
+-        return view('reclamations.index', compact('reclamations'));
++        return view('admin.reclamations.index', compact('reclamations'));
+     }
+ 
+-    // ➤ Traitement par le professeur (accepter ou rejeter)
+-    public function traiter(Reclamation $reclamation, Request $request)
++    public function unlockNote(Request $request, Reclamation $reclamation)
+     {
+-        $request->validate([
+-            'statut' => 'required|in:traitee,rejetee',
+-            'reponse' => 'nullable|string|max:1000',
++        $validated = $request->validate([
++            'action' => 'required|in:accept,reject',
++            'reponse_admin' => 'required_if:action,reject|nullable|string|max:1000',
+         ]);
+ 
+-        $reclamation->update([
+-            'statut' => $request->statut,
+-            'admin_id' => Auth::id(),
+-            'reponse' => $request->reponse
+-        ]);
++        DB::transaction(function () use ($validated, $reclamation) {
++            $note = $reclamation->note;
++
++            if ($validated['action'] === 'accept') {
++                // Déverrouiller la note
++                if ($note && $note->is_locked) {
++                    $note->update(['is_locked' => false]);
++                }
++            } elseif ($validated['action'] === 'reject') {
++                // Rejeter, verrouiller la note si elle ne l'est pas déjà
++                if ($note && ! $note->is_locked) {
++                    $note->update(['is_locked' => true]);
++                }
++            }
++
++            // Mettre à jour la réclamation
++            $reclamation->update([
++                'statut' => $validated['action'] === 'accept' ? 'resolue' : 'rejetee',
++                'reponse_admin' => $validated['reponse_admin'] ?? ($validated['action'] === 'accept' ? 'Note déverrouillée' : 'Note verrouillée'),
++            ]);
+ 
+-        // Optionnel : envoyer une notification à l'étudiant
++            // Notification au professeur
++            if ($reclamation->professeur && $reclamation->professeur->user) {
++                $reclamation->professeur->user->notify(new ReclamationResponseNotification($reclamation));
++            }
++        });
+ 
+         return back()->with('success', 'Réclamation traitée avec succès.');
+     }
+diff --git a/app/Models/AnneeAcademique.php b/app/Models/AnneeAcademique.php
+index c52764c..8a73ea4 100644
+--- a/app/Models/AnneeAcademique.php
++++ b/app/Models/AnneeAcademique.php
+@@ -14,4 +14,9 @@ public function periode()
+     {
+         return $this->hasMany(PeriodeAcademique::class);
+     }
++
++    public function reclamations()
++    {
++        return $this->hasMany(Reclamation::class, 'annee_academique_id');
++    }
+ }
+diff --git a/app/Models/Bulletin.php b/app/Models/Bulletin.php
+index fbedb22..aa6282c 100644
+--- a/app/Models/Bulletin.php
++++ b/app/Models/Bulletin.php
+@@ -39,6 +39,9 @@ public function matiere()
+ {
+     return $this->belongsTo(Matiere::class);
+ }
+-
++public function reclamations()
++{
++    return $this->hasMany(Reclamation::class);
++}
+ 
+ }
+diff --git a/app/Models/Matiere.php b/app/Models/Matiere.php
+index 0d8041e..a1c6f45 100644
+--- a/app/Models/Matiere.php
++++ b/app/Models/Matiere.php
+@@ -4,6 +4,7 @@
+ 
+ use Illuminate\Database\Eloquent\Factories\HasFactory;
+ use Illuminate\Database\Eloquent\Model;
++use App\Notifications\ReclamationNotification;
+ 
+ class Matiere extends Model
+ {
+@@ -40,4 +41,15 @@ public function affectations()
+     {
+         return $this->hasMany(\App\Models\Affectation::class);
+     }
++    public function professeur()
++{
++    return $this->belongsTo(User::class, 'professeur_id');
++}
++public function professeurs()
++{
++    return $this->belongsToMany(Professeur::class, 'classe_matiere_professeur')
++                ->withPivot('classe_id', 'coefficient', 'id');
++}
++
++
+ }
+diff --git a/app/Models/Note.php b/app/Models/Note.php
+index 8d615e7..bc40806 100644
+--- a/app/Models/Note.php
++++ b/app/Models/Note.php
+@@ -36,4 +36,9 @@ public function periode()
+     {
+         return $this->belongsTo(PeriodeAcademique::class);
+     }
++
++    public function reclamations()
++{
++    return $this->hasMany(Reclamation::class);
++}
+ }
+diff --git a/app/Models/Reclamation.php b/app/Models/Reclamation.php
+index f97c482..62f68d6 100644
+--- a/app/Models/Reclamation.php
++++ b/app/Models/Reclamation.php
+@@ -6,34 +6,60 @@
+ 
+ class Reclamation extends Model
+ {
+-    //
+-     protected $fillable = [
+-        'eleve_id', 'professeur_id', 'admin_id', 'message', 
+-        'statut', 'matiere_id', 'note_id'
++    protected $table = 'reclamations';
++
++    protected $fillable = [
++        'bulletin_id',
++        'eleve_id',
++        'matiere_id',
++        'type_evaluation',
++        'periode_id',
++        'annee_academique_id',
++        'type',
++        'note_id',
++        'professeur_id',
++        'description',
++        'statut',
++        'reponse_admin',
+     ];
+ 
++    public function bulletin()
++    {
++        return $this->belongsTo(Bulletin::class);
++    }
++
+     public function eleve()
+     {
+         return $this->belongsTo(Eleve::class);
+     }
+ 
+-    public function professeur()
++    public function matiere()
+     {
+-        return $this->belongsTo(User::class, 'professeur_id');
++        return $this->belongsTo(Matiere::class);
+     }
+ 
+-    public function admin()
++    public function periode()
+     {
+-        return $this->belongsTo(User::class, 'admin_id');
++        return $this->belongsTo(PeriodeAcademique::class, 'periode_id');
+     }
+ 
+-    public function matiere()
++    public function anneeAcademique()
+     {
+-        return $this->belongsTo(Matiere::class);
++        return $this->belongsTo(AnneeAcademique::class, 'annee_academique_id');
++    }
++
++    public function expediteur()
++    {
++        return $this->belongsTo(User::class, 'expediteur_id');
+     }
+ 
+     public function note()
+     {
+         return $this->belongsTo(Note::class);
+     }
+-}
+\ No newline at end of file
++
++    public function professeur()
++    {
++        return $this->belongsTo(Professeur::class, 'professeur_id');
++    }
++}
+diff --git a/app/Notifications/AdminReclamationNotification.php b/app/Notifications/AdminReclamationNotification.php
+new file mode 100644
+index 0000000..c770bfc
+--- /dev/null
++++ b/app/Notifications/AdminReclamationNotification.php
+@@ -0,0 +1,54 @@
++<?php
++
++namespace App\Notifications;
++
++use Illuminate\Bus\Queueable;
++use Illuminate\Contracts\Queue\ShouldQueue;
++use Illuminate\Notifications\Messages\MailMessage;
++use Illuminate\Notifications\Notification;
++
++class AdminReclamationNotification extends Notification
++{
++    use Queueable;
++
++    /**
++     * Create a new notification instance.
++     */
++    public function __construct()
++    {
++        //
++    }
++
++    /**
++     * Get the notification's delivery channels.
++     *
++     * @return array<int, string>
++     */
++    public function via(object $notifiable): array
++    {
++        return ['mail'];
++    }
++
++    /**
++     * Get the mail representation of the notification.
++     */
++    public function toMail(object $notifiable): MailMessage
++    {
++        return (new MailMessage)
++            ->line('The introduction to the notification.')
++            ->action('Notification Action', url('/'))
++            ->line('Thank you for using our application!');
++    }
++
++    /**
++     * Get the array representation of the notification.
++     *
++     * @return array<string, mixed>
++     */
++    public function toArray(object $notifiable): array
++    {
++        return [
++            //
++        ];
++    }
++}
+diff --git a/app/Notifications/NewReclamationNotification.php b/app/Notifications/NewReclamationNotification.php
+new file mode 100644
+index 0000000..b713ec4
+--- /dev/null
++++ b/app/Notifications/NewReclamationNotification.php
+@@ -0,0 +1,42 @@
++<?php
++namespace App\Notifications;
++
++use Illuminate\Bus\Queueable;
++use Illuminate\Notifications\Notification;
++use Illuminate\Contracts\Queue\ShouldQueue;
++use Illuminate\Notifications\Messages\MailMessage;
++
++class NewReclamationNotification extends Notification
++{
++    use Queueable;
++
++    protected $reclamation;
++
++    public function __construct($reclamation)
++    {
++        $this->reclamation = $reclamation;
++    }
++
++    public function via($notifiable)
++    {
++        return ['database', 'mail'];
++    }
++
++    public function toMail($notifiable)
++    {
++        return (new MailMessage)
++                    ->subject('Nouvelle réclamation reçue')
++                    ->line('Une nouvelle réclamation a été soumise par ' . $this->reclamation->eleve->user->name)
++                    ->action('Voir la réclamation', url('/reclamations'))
++                    ->line('Type: ' . ucfirst(str_replace('_', ' ', $this->reclamation->type)));
++    }
++
++    public function toArray($notifiable)
++    {
++        return [
++            'message' => 'Nouvelle réclamation de ' . $this->reclamation->eleve->user->name,
++            'link' => '/reclamations',
++            'type' => 'new_reclamation'
++        ];
++    }
++}
+\ No newline at end of file
+diff --git a/app/Notifications/NoteModificationNotification.php b/app/Notifications/NoteModificationNotification.php
+new file mode 100644
+index 0000000..e4feb8a
+--- /dev/null
++++ b/app/Notifications/NoteModificationNotification.php
+@@ -0,0 +1,54 @@
++<?php
++
++namespace App\Notifications;
++
++use Illuminate\Bus\Queueable;
++use Illuminate\Contracts\Queue\ShouldQueue;
++use Illuminate\Notifications\Messages\MailMessage;
++use Illuminate\Notifications\Notification;
++
++class NoteModificationNotification extends Notification
++{
++    use Queueable;
++
++    /**
++     * Create a new notification instance.
++     */
++    public function __construct()
++    {
++        //
++    }
++
++    /**
++     * Get the notification's delivery channels.
++     *
++     * @return array<int, string>
++     */
++    public function via(object $notifiable): array
++    {
++        return ['mail'];
++    }
++
++    /**
++     * Get the mail representation of the notification.
++     */
++    public function toMail(object $notifiable): MailMessage
++    {
++        return (new MailMessage)
++            ->line('The introduction to the notification.')
++            ->action('Notification Action', url('/'))
++            ->line('Thank you for using our application!');
++    }
++
++    /**
++     * Get the array representation of the notification.
++     *
++     * @return array<string, mixed>
++     */
++    public function toArray(object $notifiable): array
++    {
++        return [
++            //
++        ];
++    }
++}
+diff --git a/app/Notifications/ReclamationEnvoyeeNotification.php b/app/Notifications/ReclamationEnvoyeeNotification.php
+new file mode 100644
+index 0000000..a914cd2
+--- /dev/null
++++ b/app/Notifications/ReclamationEnvoyeeNotification.php
+@@ -0,0 +1,32 @@
++<?php
++
++namespace App\Notifications;
++
++use Illuminate\Bus\Queueable;
++use Illuminate\Contracts\Queue\ShouldQueue;
++use Illuminate\Notifications\Messages\MailMessage;
++use Illuminate\Notifications\Notification;
++use Illuminate\Notifications\Messages\DatabaseMessage;
++
++class ReclamationEnvoyeeNotification extends Notification
++{
++    protected $reclamation;
++
++    public function __construct($reclamation)
++    {
++        $this->reclamation = $reclamation;
++    }
++
++    public function via($notifiable)
++    {
++        return ['database'];
++    }
++
++    public function toDatabase($notifiable)
++    {
++        return [
++            'message' => 'Votre réclamation a été envoyée avec succès.',
++            'reclamation_id' => $this->reclamation->id,
++        ];
++    }
++}
+diff --git a/app/Notifications/ReclamationNotification.php b/app/Notifications/ReclamationNotification.php
+index 63eb280..6ec6d7f 100644
+--- a/app/Notifications/ReclamationNotification.php
++++ b/app/Notifications/ReclamationNotification.php
+@@ -3,6 +3,8 @@
+ namespace App\Notifications;
+ 
+ use App\Models\Reclamation;
++use Illuminate\Bus\Queueable;
++use Illuminate\Contracts\Queue\ShouldQueue;
+ use Illuminate\Notifications\Notification;
+ use Illuminate\Notifications\Messages\MailMessage;
+ 
+@@ -10,7 +12,7 @@ class ReclamationNotification extends Notification
+ {
+     protected $reclamation;
+ 
+-    public function __construct(Reclamation $reclamation)
++    public function __construct($reclamation)
+     {
+         $this->reclamation = $reclamation;
+     }
+@@ -22,20 +24,23 @@ public function via($notifiable)
+ 
+     public function toMail($notifiable)
+     {
++        $eleve = $this->reclamation->eleve->user->nom_complet ?? 'Élève inconnu';
+         return (new MailMessage)
+-            ->subject('Nouvelle réclamation sur ' . $this->reclamation->matiere->nom)
+-            ->line('Une nouvelle réclamation a été soumise par lélève : ' . $this->reclamation->eleve->user->nom)
+-            ->line('Message : ' . $this->reclamation->message)
+-            ->action('Voir la réclamation', url('/reclamations'))
+-            ->line('Merci de traiter cette réclamation rapidement.');
++            ->subject('Nouvelle réclamation de '.$eleve)
++            ->greeting('Bonjour')
++            ->line("Une nouvelle réclamation a été déposée par l'élève **$eleve**.")
++            ->line("Type : {$this->reclamation->type}")
++            ->line("Matière : {$this->reclamation->matiere->nom}")
++            ->action('Voir les réclamations', url(route('reclamations.index')))
++            ->line('Merci de traiter cette réclamation dans les plus brefs délais.');
+     }
+ 
+-    public function toArray($notifiable)
++    public function toDatabase($notifiable)
+     {
+         return [
++            'message' => 'Nouvelle réclamation de ' . ($this->reclamation->eleve->user->nom_complet ?? 'Élève inconnu'),
+             'reclamation_id' => $this->reclamation->id,
+-            'message' => 'Réclamation reçue sur ' . $this->reclamation->matiere->nom,
+-            'url' => '/reclamations'
++            'url' => route('reclamations.index'),
+         ];
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/Notifications/ReclamationResponseNotification.php b/app/Notifications/ReclamationResponseNotification.php
+new file mode 100644
+index 0000000..0593633
+--- /dev/null
++++ b/app/Notifications/ReclamationResponseNotification.php
+@@ -0,0 +1,54 @@
++<?php
++
++namespace App\Notifications;
++
++use Illuminate\Bus\Queueable;
++use Illuminate\Contracts\Queue\ShouldQueue;
++use Illuminate\Notifications\Messages\MailMessage;
++use Illuminate\Notifications\Notification;
++
++class ReclamationResponseNotification extends Notification implements ShouldQueue
++{
++    use Queueable;
++
++    protected $reclamation;
++
++    public function __construct($reclamation)
++    {
++        $this->reclamation = $reclamation;
++    }
++
++    public function via($notifiable)
++    {
++        return ['mail', 'database'];
++    }
++
++    public function toMail($notifiable)
++    {
++        return (new MailMessage)
++            ->subject('Réponse à votre réclamation')
++            ->greeting('Bonjour ' . $notifiable->name . ',')
++            ->line('Votre réclamation a été traitée. Voici les détails :')
++            ->line('Matière : ' . $this->reclamation->matiere->nom)
++            ->line('Statut : ' . ucfirst($this->reclamation->statut))
++            ->line('Réponse : ' . $this->reclamation->reponse_admin)
++            ->action('Voir le bulletin', route('bulletins.show', [
++                'annee_academique_id' => $this->reclamation->bulletin->periode->annee_academique_id
++            ]))
++            ->line('Merci pour votre confiance.')
++            ->salutation('Cordialement,');
++    }
++
++    public function toArray($notifiable)
++    {
++        return [
++            'message' => 'Réponse à votre réclamation: ' . ucfirst($this->reclamation->statut),
++            'link' => route('bulletins.show', [
++                'annee_academique_id' => $this->reclamation->bulletin->periode->annee_academique_id
++            ]),
++            'type' => 'reclamation_response',
++            'status' => $this->reclamation->statut,
++            'subject' => $this->reclamation->matiere->nom,
++        ];
++    }
++}
+\ No newline at end of file
+diff --git a/database/migrations/2025_07_01_112703_create_reclamations_table.php b/database/migrations/2025_07_01_112703_create_reclamations_table.php
+new file mode 100644
+index 0000000..38edf6e
+--- /dev/null
++++ b/database/migrations/2025_07_01_112703_create_reclamations_table.php
+@@ -0,0 +1,34 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    public function up()
++    {
++        Schema::create('reclamations', function (Blueprint $table) {
++            $table->id();
++
++
++            $table->foreignId('matiere_id')->constrained('matieres');
++            $table->foreignId('periode_id')->constrained('periodes_academiques');
++            $table->foreignId('annee_academique_id')->constrained('annee_academique'); 
++            $table->foreignId('bulletin_id')->constrained('bulletins');
++            $table->foreignId('eleve_id')->constrained('eleves');
++
++            $table->string('type_evaluation');
++            $table->string('type');
++            $table->text('description');
++            $table->string('statut')->default('nouvelle');
++
++            $table->timestamps();
++        });
++    }
++
++    public function down()
++    {
++        Schema::dropIfExists('reclamations');
++    }
++};
+diff --git a/database/migrations/2025_07_02_153551_add_reponse_admin_to_reclamations_table.php b/database/migrations/2025_07_02_153551_add_reponse_admin_to_reclamations_table.php
+new file mode 100644
+index 0000000..f848cb2
+--- /dev/null
++++ b/database/migrations/2025_07_02_153551_add_reponse_admin_to_reclamations_table.php
+@@ -0,0 +1,23 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++  public function up()
++{
++    Schema::table('reclamations', function (Blueprint $table) {
++        $table->text('reponse_admin')->nullable()->after('statut');
++    });
++}
++
++public function down()
++{
++    Schema::table('reclamations', function (Blueprint $table) {
++        $table->dropColumn('reponse_admin');
++    });
++}
++
++};
+diff --git a/database/migrations/2025_07_03_100933_add_note_id_to_reclamations_table.php b/database/migrations/2025_07_03_100933_add_note_id_to_reclamations_table.php
+new file mode 100644
+index 0000000..7d2f6c7
+--- /dev/null
++++ b/database/migrations/2025_07_03_100933_add_note_id_to_reclamations_table.php
+@@ -0,0 +1,27 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    /**
++     * Run the migrations.
++     */
++public function up()
++{
++    Schema::table('reclamations', function (Blueprint $table) {
++        $table->unsignedBigInteger('note_id')->nullable()->after('eleve_id');
++        $table->foreign('note_id')->references('id')->on('notes')->onDelete('cascade');
++    });
++}
++
++public function down()
++{
++    Schema::table('reclamations', function (Blueprint $table) {
++        $table->dropForeign(['note_id']);
++        $table->dropColumn('note_id');
++    });
++}
++};
+diff --git a/database/migrations/2025_07_03_132002_make_note_id_non_nullable_in_reclamations.php b/database/migrations/2025_07_03_132002_make_note_id_non_nullable_in_reclamations.php
+new file mode 100644
+index 0000000..385af68
+--- /dev/null
++++ b/database/migrations/2025_07_03_132002_make_note_id_non_nullable_in_reclamations.php
+@@ -0,0 +1,26 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    public function up()
++    {
++        Schema::table('reclamations', function (Blueprint $table) {
++
++            DB::statement('DELETE FROM reclamations WHERE note_id IS NULL');
++
++          
++            $table->foreignId('note_id')->nullable(false)->change();
++        });
++    }
++
++    public function down()
++    {
++        Schema::table('reclamations', function (Blueprint $table) {
++            $table->foreignId('note_id')->nullable()->change();
++        });
++    }
++};
+diff --git a/database/migrations/2025_07_09_150237_add_professeur_id_to_reclamations_table.php b/database/migrations/2025_07_09_150237_add_professeur_id_to_reclamations_table.php
+new file mode 100644
+index 0000000..e8e4a0b
+--- /dev/null
++++ b/database/migrations/2025_07_09_150237_add_professeur_id_to_reclamations_table.php
+@@ -0,0 +1,29 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    /**
++     * Run the migrations.
++     */
++    public function up(): void
++    {
++        Schema::table('reclamations', function (Blueprint $table) {
++            if (! Schema::hasColumn('reclamations', 'professeur_id')) {
++                $table->unsignedBigInteger('professeur_id')->nullable()->after('eleve_id');
++                $table->foreign('professeur_id')->references('id')->on('professeurs')->onDelete('set null');
++            }
++        });
++    }
++
++    public function down(): void
++    {
++        Schema::table('reclamations', function (Blueprint $table) {
++            $table->dropForeign(['professeur_id']);
++            $table->dropColumn('professeur_id');
++        });
++    }
++};
+diff --git a/database/migrations/2025_07_09_150321_modify_bulletin_id_in_reclamations_table.php b/database/migrations/2025_07_09_150321_modify_bulletin_id_in_reclamations_table.php
+new file mode 100644
+index 0000000..a2f6b77
+--- /dev/null
++++ b/database/migrations/2025_07_09_150321_modify_bulletin_id_in_reclamations_table.php
+@@ -0,0 +1,34 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++class ModifyBulletinIdInReclamationsTable extends Migration
++{
++    /**
++     * Run the migrations.
++     *
++     * @return void
++     */
++    public function up()
++    {
++        Schema::table('reclamations', function (Blueprint $table) {
++
++            $table->unsignedBigInteger('bulletin_id')->nullable()->change();
++        });
++    }
++
++    /**
++     * Reverse the migrations.
++     *
++     * @return void
++     */
++    public function down()
++    {
++        Schema::table('reclamations', function (Blueprint $table) {
++
++            $table->unsignedBigInteger('bulletin_id')->nullable(false)->change();
++        });
++    }
++}
+diff --git a/resources/views/admin/dashboard.blade.php b/resources/views/admin/dashboard.blade.php
+index 4a929cd..7c7f89e 100644
+--- a/resources/views/admin/dashboard.blade.php
++++ b/resources/views/admin/dashboard.blade.php
+@@ -12,8 +12,7 @@
+                         <i class="fas fa-user-clock card-icon"></i>
+                         <h5 class="card-title">Demandes en attente</h5>
+                         <h3 class="card-text">{{ $counts['pending'] }}</h3>
+-                        <a href="{{ route('admin.users.pending') }}" class="btn btn-outline-light btn-sm mt-2">Voir
+-                            demandes</a>
++                        <a href="{{ route('admin.users.pending') }}" class="btn btn-outline-light btn-sm mt-2">Voir demandes</a>
+                     </div>
+                 </div>
+             </div>
+@@ -24,8 +23,7 @@
+                         <i class="fas fa-users card-icon"></i>
+                         <h5 class="card-title">Utilisateurs actifs</h5>
+                         <h3 class="card-text">{{ $counts['active'] }}</h3>
+-                        <a href="{{ route('admin.users.active') }}" class="btn btn-outline-light btn-sm mt-2">Voir
+-                            utilisateurs</a>
++                        <a href="{{ route('admin.users.active') }}" class="btn btn-outline-light btn-sm mt-2">Voir utilisateurs</a>
+                     </div>
+                 </div>
+             </div>
+@@ -42,8 +40,7 @@
+                             <i class="fas fa-calendar card-icon"></i>
+                             <h5 class="card-title">Ajouter/Modifier année</h5>
+                             <h3 class="card-text"></h3>
+-                            <a href="{{ route('admin.annees.index') }}" class="btn btn-outline-light btn-sm mt-2">Voir
+-                                années</a>
++                            <a href="{{ route('admin.annees.index') }}" class="btn btn-outline-light btn-sm mt-2">Voir années</a>
+                         </div>
+                     </div>
+                 </div>
+@@ -54,8 +51,7 @@ class="card dashboard-card bg-black shadow-sm border-0 h-100 animate__animated a
+                         <div class="card-body text-center d-flex flex-column justify-content-center">
+                             <i class="fas fa-clock fa-2x mb-3"></i>
+                             <h5 class="card-title">Gérer les Périodes</h5>
+-                            <a href="{{ route('admin.periodes.index') }}" class="btn btn-outline-light btn-sm mt-2">Voir les
+-                                périodes</a>
++                            <a href="{{ route('admin.periodes.index') }}" class="btn btn-outline-light btn-sm mt-2">Voir les périodes</a>
+                         </div>
+                     </div>
+                 </div>
+@@ -74,8 +70,7 @@ class="card dashboard-card bg-black shadow-sm border-0 h-100 animate__animated a
+                             <i class="fas fa-compass card-icon"></i>
+                             <h5 class="card-title">Affectation professeurs</h5>
+                             <h3 class="card-text"></h3>
+-                            <a href="{{ route('professeurs.index') }}" class="btn btn-outline-light btn-sm mt-2">Voir
+-                                professeurs</a>
++                            <a href="{{ route('professeurs.index') }}" class="btn btn-outline-light btn-sm mt-2">Voir professeurs</a>
+                         </div>
+                     </div>
+                 </div>
+@@ -86,32 +81,26 @@ class="card dashboard-card bg-black shadow-sm border-0 h-100 animate__animated a
+                             <i class="fas fa-user-graduate card-icon"></i>
+                             <h5 class="card-title">Affectation élèves</h5>
+                             <h3 class="card-text"></h3>
+-                            <a href="{{ route('admin.affectation.annees') }}" class="btn btn-outline-light btn-sm mt-2">Voir
+-                                élèves</a>
++                            <a href="{{ route('admin.affectation.annees') }}" class="btn btn-outline-light btn-sm mt-2">Voir élèves</a>
+                         </div>
+                     </div>
+                 </div>
+-            </div>
+-        </div>
+-
+-
+-    </div>
+-
+ 
+-    <div class="card mb-4">
+-        <br>
+-        <h5 class="mb-4 text-dark">Resultats fin d'annee</h5>
+-
+-        <div class="col-md-4 mb-3">
+-            <div class="card dashboard-card bg-danger text-white">
+-                <div class="card-body text-center d-flex flex-column justify-content-center">
+-                    <i class="fas fa-edit card-icon"></i>
+-                    <h5 class="card-title">Migrations</h5>
+-                    <h3 class="card-text"></h3>
+-                    <a href="{{ route('admin.resultats') }}" class="btn btn-outline-light btn-sm mt-2">Voir plus</a>
++                <div class="col-md-4 mb-3">
++                    <div class="card dashboard-card bg-warning text-white">
++                        <div class="card-body text-center d-flex flex-column justify-content-center">
++                            <i class="fas fa-envelope card-icon"></i>
++                            <h5 class="card-title">Gestion des réclamations</h5>
++                            <h3 class="card-text"></h3>
++                            <a href="{{ route('admin.reclamations.admin') }}" class="btn btn-outline-light btn-sm mt-2">Voir
++                                plus</a>
++                        </div>
++                    </div>
+                 </div>
+             </div>
+         </div>
++
++
+     </div>
+ 
+ 
+@@ -126,8 +115,7 @@ class="card dashboard-card bg-black shadow-sm border-0 h-100 animate__animated a
+                     <i class="fas fa-edit card-icon"></i>
+                     <h5 class="card-title">Modifier les comptes utilisateurs</h5>
+                     <h3 class="card-text"></h3>
+-                    <a href="{{ route('admin.users.index') }}" class="btn btn-outline-light btn-sm mt-2">Voir
+-                        utilisteurs</a>
++                    <a href="{{ route('admin.users.index') }}" class="btn btn-outline-light btn-sm mt-2">Voir utilisteurs</a>
+                 </div>
+             </div>
+         </div>
+diff --git a/resources/views/admin/professeurs/affectation.blade.php b/resources/views/admin/professeurs/affectation.blade.php
+index 0ba56c7..1a40527 100644
+--- a/resources/views/admin/professeurs/affectation.blade.php
++++ b/resources/views/admin/professeurs/affectation.blade.php
+@@ -3,65 +3,111 @@
+ @section('content')
+     <div class="container mt-4">
+ 
++
+         @if ($errors->any())
+-            <div class="alert alert-danger">
++            <div class="alert alert-danger alert-dismissible fade show" role="alert">
++                <strong>Erreur !</strong>
+                 <ul class="mb-0">
+                     @foreach ($errors->all() as $error)
+                         <li>{{ $error }}</li>
+                     @endforeach
+                 </ul>
++                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+             </div>
+         @endif
+ 
++        {{-- Titre de la page --}}
++        <div class="card shadow-sm mb-4 border-0">
++            <div class="card-body bg-light d-flex align-items-center">
++                <i class="bi bi-clipboard-check-fill fs-4 text-primary me-3"></i>
++                <h3 class="mb-0 text-dark">Affecter à des classes et matières</h3>
++            </div>
++        </div>
+ 
+-        <h3>Affecter {{ $professeur->name }} à des classes et matières</h3>
++        {{-- Filtres Année académique --}}
++        <div class="mb-3">
++            <label for="anneeFilter" class="form-label fw-bold">Filtrer par année académique :</label>
++            <select id="anneeFilter" class="form-select">
++                <option value="all">-- Toutes les années --</option>
++                @foreach ($annees as $annee)
++                    <option value="annee-{{ $annee->id }}">{{ $annee->libelle }}</option>
++                @endforeach
++            </select>
++        </div>
+ 
+-        <form action="{{ route('admin.professeurs.affectation.store', $professeur->id) }}" method="POST">
++        {{-- Formulaire --}}
++        <form action="{{ route('admin.professeurs.affectation.update', $professeur->id) }}" method="POST">
+             @csrf
++            @method('PUT')
+ 
+-            <div class="mb-3">
+-                <label for="annee_scolaire">Année scolaire</label>
+-                <select name="annee_scolaire_id" class="form-select" id="annee-selector" required>
+-                    @foreach ($annees as $annee)
+-                        <option value="{{ $annee->id }}">{{ $annee->libelle }}</option>
+-                    @endforeach
+-                </select>
+-            </div>
++            @foreach ($annees as $annee)
++                <div class="annee-section annee-{{ $annee->id }}">
++                    <h4 class="text-primary">{{ $annee->libelle }}</h4>
+ 
+-            @foreach ($classes as $classe)
+-                <div class="card mb-3">
+-                    <div class="card-header">
+-                        {{ $classe->nom }} @if ($classe->serie)
+-                            ({{ $classe->serie }})
+-                        @endif
+-                    </div>
+-                    <div class="card-body">
+-                        @php
+-                            // Utilisez pour éliminer les doublon
+-                            $matieresUniques = $classe->matieres->unique('id');
+-                        @endphp
++                    @foreach ($classes as $classe)
++                        <div class="card mb-3">
++                            <div class="card-header fw-semibold">
++                                {{ $classe->nom }} @if ($classe->serie)
++                                    ({{ $classe->serie }})
++                                @endif
++                            </div>
++                            <div class="card-body">
++                                @php
++                                    $matieresUniques = $classe->matieres->unique('id');
++                                @endphp
+ 
+-                        @if ($matieresUniques->count())
+-                            @foreach ($matieresUniques as $matiere)
+-                                <div class="form-check">
+-                                    <input class="form-check-input" type="checkbox" name="affectations[]"
+-                                        value="{{ $classe->id }}-{{ $matiere->id }}"
+-                                        id="aff_{{ $classe->id }}_{{ $matiere->id }}">
+-                                    <label class="form-check-label" for="aff_{{ $classe->id }}_{{ $matiere->id }}">
+-                                        {{ $matiere->nom }} ({{ $matiere->code }})
+-                                    </label>
+-                                </div>
+-                            @endforeach
+-                        @else
+-                            <p class="text-muted">Aucune matière disponible pour cette classe.</p>
+-                        @endif
+-                    </div>
++                                @if ($matieresUniques->isEmpty())
++                                    <p class="text-muted fst-italic">Aucune matière disponible pour cette classe.</p>
++                                @endif
++
++                                @foreach ($matieresUniques as $matiere)
++                                    @php
++                                        $checked = $affectations->contains(function ($aff) use (
++                                            $annee,
++                                            $classe,
++                                            $matiere,
++                                        ) {
++                                            return $aff->annee_academique_id == $annee->id &&
++                                                $aff->classe_id == $classe->id &&
++                                                $aff->matiere_id == $matiere->id;
++                                        });
++                                    @endphp
++
++                                    <div class="form-check mb-2">
++                                        <input class="form-check-input" type="checkbox" name="affectations[]"
++                                            value="{{ $annee->id }}-{{ $classe->id }}-{{ $matiere->id }}"
++                                            id="aff_{{ $annee->id }}_{{ $classe->id }}_{{ $matiere->id }}"
++                                            {{ $checked ? 'checked' : '' }}>
++                                        <label class="form-check-label"
++                                            for="aff_{{ $annee->id }}_{{ $classe->id }}_{{ $matiere->id }}">
++                                            {{ $matiere->nom }} ({{ $matiere->code }})
++                                        </label>
++                                    </div>
++                                @endforeach
++                            </div>
++                        </div>
++                    @endforeach
+                 </div>
+             @endforeach
+ 
+-            <button class="btn btn-success mt-3">Enregistrer l'affectation</button>
+-            <a href="{{ route('admin.professeurs.affectation.edit', $professeur->id) }}"
+-                class="btn btn-primary mt-3">Modifier les affectations existantes</a>
++            <button class="btn btn-success mt-3 w-100">
++                <i class="bi bi-save me-2"></i> Enregistrer / Mise à jour
++            </button>
+         </form>
+     </div>
++
++    {{-- Script JS pour filtrage par année --}}
++    <script>
++        document.getElementById('anneeFilter').addEventListener('change', function() {
++            const selected = this.value;
++            const sections = document.querySelectorAll('.annee-section');
++            sections.forEach(section => {
++                if (selected === 'all' || section.classList.contains(selected)) {
++                    section.style.display = 'block';
++                } else {
++                    section.style.display = 'none';
++                }
++            });
++        });
++    </script>
+ @endsection
+diff --git a/resources/views/admin/reclamations/index.blade.php b/resources/views/admin/reclamations/index.blade.php
+new file mode 100644
+index 0000000..8376281
+--- /dev/null
++++ b/resources/views/admin/reclamations/index.blade.php
+@@ -0,0 +1,154 @@
++@extends('layouts.admin')
++
++@section('content')
++    <div class="container-fluid">
++        <div class="card shadow-lg">
++            <div class="card-header bg-admin">
++                <h3 class="mb-0">
++                    <i class="fas fa-exclamation-triangle me-2"></i>
++                    Réclamations en attente de traitement
++                </h3>
++                <br>
++                @if (session('success'))
++                    <div class="alert alert-success">
++                        {{ session('success') }}
++                    </div>
++                @endif
++            </div>
++
++            <div class="card-body">
++                @if ($reclamations->isEmpty())
++                    <div class="alert alert-info">
++                        <i class="fas fa-info-circle me-2"></i>
++                        Aucune réclamation en attente de traitement.
++                    </div>
++                @else
++                    <div class="table-responsive">
++
++                        <table class="table table-hover">
++                            <thead class="table-light">
++                                <tr>
++                                    <th>Date</th>
++                                    <th>Professeur</th>
++                                    <th>Élève</th>
++                                    <th>Matière</th>
++                                    <th>Période</th>
++                                    <th>Évaluation</th>
++                                    <th>Actions</th>
++                                </tr>
++                            </thead>
++                            <tbody>
++                                @foreach ($reclamations as $reclamation)
++                                    <tr>
++                                        <td>{{ $reclamation->created_at->format('d/m/Y H:i') }}</td>
++                                        <td>{{ $reclamation->professeur->user->nom ?? 'N/A' }}</td>
++                                        <td>{{ $reclamation->eleve->user->nom }} {{ $reclamation->eleve->user->prenom }}
++                                        </td>
++                                        <td>{{ $reclamation->matiere->nom }}</td>
++                                        <td>{{ $reclamation->periode->nom }}</td>
++                                        <td>{{ ucfirst($reclamation->type_evaluation) }}
++                                            ({{ $reclamation->note->nom_evaluation ?? 'N/A' }})
++                                        </td>
++                                        <td>
++                                            <button class="btn btn-sm btn-primary" data-bs-toggle="modal"
++                                                data-bs-target="#traitementModal{{ $reclamation->id }}">
++                                                <i class="fas fa-edit"></i> Traiter
++                                            </button>
++                                        </td>
++                                    </tr>
++
++                                    <!-- Modal Traitement -->
++                                    <div class="modal fade" id="traitementModal{{ $reclamation->id }}" tabindex="-1"
++                                        aria-hidden="true">
++                                        <div class="modal-dialog modal-lg">
++                                            <div class="modal-content">
++                                                <div class="modal-header bg-primary text-white">
++                                                    <h5 class="modal-title">Traitement de la réclamation</h5>
++                                                    <button type="button" class="btn-close" data-bs-dismiss="modal"
++                                                        aria-label="Close"></button>
++                                                </div>
++                                                <form action="{{ route('admin.reclamations.unlock', $reclamation) }}"
++                                                    method="POST">
++                                                    @csrf
++                                                    <div class="modal-body">
++                                                        <div class="mb-3">
++                                                            <h6>Description :</h6>
++                                                            <p>{{ $reclamation->description }}</p>
++                                                        </div>
++
++                                                        <div class="row mb-3">
++                                                            <div class="col-md-6">
++                                                                <h6>Note actuelle :</h6>
++                                                                <div class="card">
++                                                                    <div class="card-body">
++                                                                        <p><strong>Valeur :</strong>
++                                                                            {{ $reclamation->note->valeur ?? 'N/A' }}</p>
++                                                                        <p><strong>Statut :</strong>
++                                                                            @if ($reclamation->note && $reclamation->note->is_locked)
++                                                                                <span
++                                                                                    class="badge bg-danger">Verrouillée</span>
++                                                                            @else
++                                                                                <span
++                                                                                    class="badge bg-success">Déverrouillée</span>
++                                                                            @endif
++                                                                        </p>
++                                                                    </div>
++                                                                </div>
++                                                            </div>
++                                                            <div class="col-md-6">
++                                                                <h6>Informations :</h6>
++                                                                <ul class="list-group">
++                                                                    <li class="list-group-item">
++                                                                        <strong>Professeur :</strong>
++                                                                        {{ $reclamation->professeur->user->nom ?? 'N/A' }}
++                                                                    </li>
++                                                                    <li class="list-group-item">
++                                                                        <strong>Date création :</strong>
++                                                                        {{ $reclamation->created_at->format('d/m/Y H:i') }}
++                                                                    </li>
++                                                                </ul>
++                                                            </div>
++                                                        </div>
++
++                                                        <div class="mb-3">
++                                                            <label for="action" class="form-label">Action</label>
++                                                            <select class="form-select" name="action" id="action"
++                                                                required>
++                                                                <option value="accept">Accepter (déverrouiller la note)
++                                                                </option>
++                                                                <option value="reject">Rejeter (maintenir verrouillée)
++                                                                </option>
++                                                            </select>
++                                                        </div>
++
++                                                        <div class="mb-3">
++                                                            <label for="reponse_admin" class="form-label">Réponse à envoyer
++                                                                au professeur</label>
++                                                            <textarea class="form-control" name="reponse_admin" id="reponse_admin" rows="3" required></textarea>
++                                                            <small class="text-muted">Cette réponse sera envoyée au
++                                                                professeur qui a fait la demande</small>
++                                                        </div>
++                                                    </div>
++                                                    <div class="modal-footer">
++                                                        <button type="button" class="btn btn-secondary"
++                                                            data-bs-dismiss="modal">Annuler</button>
++                                                        <button type="submit" class="btn btn-primary">Valider la
++                                                            décision</button>
++                                                    </div>
++                                                </form>
++                                            </div>
++                                        </div>
++                                    </div>
++                                @endforeach
++                            </tbody>
++                        </table>
++                    </div>
++
++                    <div class="d-flex justify-content-center mt-4">
++                        {{ $reclamations->links() }}
++                    </div>
++                @endif
++            </div>
++        </div>
++    </div>
++@endsection
+diff --git a/resources/views/bulletin/bulletin.blade.php b/resources/views/bulletin/bulletin.blade.php
+index 76a5fc5..9110f30 100644
+--- a/resources/views/bulletin/bulletin.blade.php
++++ b/resources/views/bulletin/bulletin.blade.php
+@@ -192,63 +192,62 @@ class="badge
+             @endforeach
+         @endif
+ 
+-    </div>
+-
+-@section('scripts')
+-    <script src="https://kit.fontawesome.com/your-kit-code.js" crossorigin="anonymous"></script>
+-    <script>
+-        document.addEventListener('DOMContentLoaded', function() {
+-            // Animation au chargement
+-            const sections = document.querySelectorAll('.bulletin-section');
+-            sections.forEach((section, index) => {
+-                section.style.animationDelay = `${index * 0.1}s`;
+-            });
+-
+-            // Tooltip pour les notes
+-            const badges = document.querySelectorAll('.badge');
+-            badges.forEach(badge => {
+-                badge.addEventListener('mouseenter', function() {
+-                    const note = parseFloat(this.textContent);
+-                    let appreciation = '';
+ 
+-                    if (note >= 16) appreciation = 'Excellent';
+-                    else if (note >= 14) appreciation = 'Très bien';
+-                    else if (note >= 12) appreciation = 'Bien';
+-                    else if (note >= 10) appreciation = 'Passable';
+-                    else appreciation = 'Insuffisant';
+-
+-                    this.setAttribute('title', `${appreciation} (${note}/20)`);
++    @section('scripts')
++        <script src="https://kit.fontawesome.com/your-kit-code.js" crossorigin="anonymous"></script>
++        <script>
++            document.addEventListener('DOMContentLoaded', function() {
++                // Animation au chargement
++                const sections = document.querySelectorAll('.bulletin-section');
++                sections.forEach((section, index) => {
++                    section.style.animationDelay = `${index * 0.1}s`;
+                 });
+-            });
+ 
+-            // Tri des matières
+-            const sortButton = document.createElement('button');
+-            sortButton.className = 'btn btn-outline-primary mb-3';
+-            sortButton.textContent = 'Trier par moyenne';
+-            sortButton.addEventListener('click', function() {
+-                const table = document.querySelector('.bulletin-table tbody');
+-                const rows = Array.from(table.querySelectorAll('tr'));
+-
+-                rows.sort((a, b) => {
+-                    const aNote = parseFloat(a.querySelector('td:nth-child(7)').textContent);
+-                    const bNote = parseFloat(b.querySelector('td:nth-child(7)').textContent);
+-                    return bNote - aNote;
++                // Tooltip pour les notes
++                const badges = document.querySelectorAll('.badge');
++                badges.forEach(badge => {
++                    badge.addEventListener('mouseenter', function() {
++                        const note = parseFloat(this.textContent);
++                        let appreciation = '';
++
++                        if (note >= 16) appreciation = 'Excellent';
++                        else if (note >= 14) appreciation = 'Très bien';
++                        else if (note >= 12) appreciation = 'Bien';
++                        else if (note >= 10) appreciation = 'Passable';
++                        else appreciation = 'Insuffisant';
++
++                        this.setAttribute('title', `${appreciation} (${note}/20)`);
++                    });
+                 });
+ 
+-                rows.forEach(row => table.appendChild(row));
+-            });
++                // Tri des matières
++                const sortButton = document.createElement('button');
++                sortButton.className = 'btn btn-outline-primary mb-3';
++                sortButton.textContent = 'Trier par moyenne';
++                sortButton.addEventListener('click', function() {
++                    const table = document.querySelector('.bulletin-table tbody');
++                    const rows = Array.from(table.querySelectorAll('tr'));
++
++                    rows.sort((a, b) => {
++                        const aNote = parseFloat(a.querySelector('td:nth-child(7)').textContent);
++                        const bNote = parseFloat(b.querySelector('td:nth-child(7)').textContent);
++                        return bNote - aNote;
++                    });
++
++                    rows.forEach(row => table.appendChild(row));
++                });
+ 
+-            document.querySelector('.container.py-5').prepend(sortButton);
++                document.querySelector('.container.py-5').prepend(sortButton);
+ 
+-            // Impression du bulletin
+-            const printButton = document.createElement('button');
+-            printButton.className = 'btn btn-outline-secondary mb-3 ms-2';
+-            printButton.innerHTML = '<i class="fas fa-print"></i> Imprimer';
+-            printButton.addEventListener('click', function() {
+-                window.print();
++                // Impression du bulletin
++                const printButton = document.createElement('button');
++                printButton.className = 'btn btn-outline-secondary mb-3 ms-2';
++                printButton.innerHTML = '<i class="fas fa-print"></i> Imprimer';
++                printButton.addEventListener('click', function() {
++                    window.print();
++                });
++                document.querySelector('.container.py-5').prepend(printButton);
+             });
+-            document.querySelector('.container.py-5').prepend(printButton);
+-        });
+-    </script>
+-@endsection
++        </script>
++    @endsection
+ @endsection
+diff --git a/resources/views/layouts/admin.blade.php b/resources/views/layouts/admin.blade.php
+index b565c38..990be4b 100644
+--- a/resources/views/layouts/admin.blade.php
++++ b/resources/views/layouts/admin.blade.php
+@@ -11,7 +11,7 @@
+     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+     <!-- Font Awesome -->
+     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" />
++    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
+ 
+     <!-- Custom CSS -->
+     <link href="{{ asset('css/admin.css') }}" rel="stylesheet" />
+@@ -110,7 +110,7 @@
+                     <i class="fas fa-calendar me-2"></i>Modifier/Ajouter années
+                 </a>
+             </li>
+-            <li class="nav-item">
++              <li class="nav-item">
+                 <a class="nav-link" href="{{ route('admin.periodes.index') }}">
+                     <i class="fas fa-calendar-alt me-2"></i>Modifier/Ajouter période
+                 </a>
+@@ -139,6 +139,13 @@
+                 </a>
+             </li>
+ 
++
++            <li class="nav-item">
++                <a class="nav-link" href="{{ route('admin.reclamations.admin') }}">
++                    <i class="fas fa-envelope-open-text me-2"></i>Réclamations
++                </a>
++            </li>
++
+             <li class="nav-item">
+                 <a class="nav-link" href="{{ route('admin.resultats') }}">
+                     <i class="fas fa-user-graduate me-2"></i>Liste des élèves admis/échoué
+diff --git a/resources/views/professeur/dashboard.blade.php b/resources/views/professeur/dashboard.blade.php
+index 325d2d1..a75d930 100644
+--- a/resources/views/professeur/dashboard.blade.php
++++ b/resources/views/professeur/dashboard.blade.php
+@@ -2,37 +2,37 @@
+ 
+ @section('content')
+     <div class="professor-dashboard">
+-        <div class="professor-hero">
+-            <div class="hero-overlay"></div>
+-            <div class="container">
+-                <div class="hero-content text-center text-white animate__animated animate__fadeIn">
+-                    <h1 class="display-4">Espace Professeur</h1>
+-                    <p class="lead">Bienvenue, {{ Auth::user()->nom }} {{ Auth::user()->prenom }}</p>
+-                    <br>
+-                    <a href="{{ route('profile.edit') }}" class="btn btn-outline-primary">
+-                        <i class="fas fa-user-edit me-2"></i> Modifier mon profil
+-                    </a>
+-                </div>
++        <br><br><br><br>
++        {{-- SECTION HERO --}}
++        <div class="professor-hero bg-dark text-white py-5 mb-5">
++            <div class="container text-center">
++                <h1 class="display-4 animate__animated animate__fadeInDown">Espace Professeur</h1>
++                <p class="lead animate__animated animate__fadeInUp">
++                    Bienvenue, {{ Auth::user()->nom }} {{ Auth::user()->prenom }}
++                </p>
++                <a href="{{ route('profile.edit') }}" class="btn btn-outline-light mt-3">
++                    <i class="fas fa-user-edit me-2"></i> Modifier mon profil
++                </a>
+             </div>
+         </div>
+ 
+-        <div class="container py-5 animate__animated animate__fadeInUp">
+-            <div class="card shadow-lg">
+-                <div class="card-header bg-primary text-white">
+-                    <h3><i class="fas fa-calendar-alt me-2"></i> Choisir une année académique</h3>
+-                </div>
+-                <div class="card-body">
+-                    <div class="row">
++        <div class="container">
++            {{-- SECTION CLASSES ET NOTES --}}
++            <div class="mb-5">
++                <div class="card shadow-lg border-0 animate__animated animate__fadeInLeft">
++                    <div class="card-header bg-primary text-white">
++                        <h3><i class="fas fa-chalkboard-teacher me-2"></i> Gestion des Classes et Notes</h3>
++                    </div>
++                    <div class="card-body row">
+                         @foreach ($annees as $annee)
+                             <div class="col-md-4 mb-4">
+-                                <div class="card h-100 border-primary">
++                                <div class="card border-primary h-100">
+                                     <div class="card-body text-center">
+-                                        <i class="fas fa-calendar fa-3x text-primary mb-3"></i>
++                                        <i class="fas fa-calendar-alt fa-3x text-primary mb-3"></i>
+                                         <h4>{{ $annee->libelle }}</h4>
+                                         <p class="text-muted">Gérer vos classes et notes</p>
+-                                        <a href="{{ route('professeur.classes', $annee->id) }}"
+-                                            class="btn btn-primary btn-lg px-4">
+-                                            <i class="fas fa-arrow-right me-2"></i> Sélectionner
++                                        <a href="{{ route('professeur.classes', $annee->id) }}" class="btn btn-primary">
++                                            <i class="fas fa-arrow-right me-2"></i> Accéder
+                                         </a>
+                                     </div>
+                                 </div>
+@@ -41,44 +41,36 @@ class="btn btn-primary btn-lg px-4">
+                     </div>
+                 </div>
+             </div>
++
+         </div>
+     </div>
+ 
++    {{-- STYLES --}}
+     <style>
+         .professor-dashboard {
++            background-color: #f8f9fa;
+             min-height: 100vh;
+         }
+ 
+         .professor-hero {
++            background: url('/images/professor-bg.jpg') center/cover no-repeat;
+             position: relative;
+-            height: 400px;
+-            background-size: cover;
+-            display: flex;
+-            align-items: center;
+         }
+ 
+-        .hero-overlay {
++        .professor-hero::before {
++            content: "";
+             position: absolute;
+             top: 0;
+             left: 0;
+             width: 100%;
+             height: 100%;
+-            background: rgba(0, 0, 0, 0.5);
++            background-color: rgba(124, 122, 122, 0.6);
++            z-index: 0;
+         }
+ 
+-        .hero-content {
++        .professor-hero .container {
+             position: relative;
+             z-index: 1;
+-            padding-top: 80px;
+-        }
+-
+-        .card {
+-            transition: transform 0.3s ease, box-shadow 0.3s ease;
+-        }
+-
+-        .card:hover {
+-            transform: translateY(-5px);
+-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+         }
+     </style>
+ @endsection
+diff --git a/resources/views/professeur/eleves.blade.php b/resources/views/professeur/eleves.blade.php
+index c0f2634..ab093a9 100644
+--- a/resources/views/professeur/eleves.blade.php
++++ b/resources/views/professeur/eleves.blade.php
+@@ -20,7 +20,6 @@
+                     @endif
+ 
+                     @if ($periodes->isEmpty() || $affectations->isEmpty())
+-                        
+                         <div class="alert alert-warning">
+                             <i class="fas fa-exclamation-triangle me-2"></i>
+                             Aucune période académique ou matière disponible pour cette classe.
+@@ -79,6 +78,7 @@
+                                 <table class="table table-hover animate__animated animate__fadeInUp">
+                                     <thead class="table-light">
+                                         <tr>
++                                            <th>Actions</th>
+                                             <th>Nom</th>
+                                             <th>Prénom</th>
+                                             <th>Interro 1</th>
+@@ -92,6 +92,19 @@
+                                         @forelse($eleves as $eleve)
+                                             @if ($eleve->user)
+                                                 <tr>
++                                                    <td>
++                                                        <div class="d-flex gap-2">
++                                                            <a href="{{ route('reclamations.create', ['eleve' => $eleve->id]) }}"
++                                                               class="btn btn-sm btn-primary">
++                                                                Réclamer
++                                                            </a>
++
++                                                            <a href="{{ route('reclamations.suivi', ['eleve_id' => $eleve->id, 'classeId' => $classe->id, 'anneeId' => $annee->id]) }}"
++                                                                class="btn btn-sm btn-info">
++                                                                <i class="fas fa-eye"></i> Suivi
++                                                            </a>
++                                                        </div>
++                                                    </td>
+                                                     <td>{{ $eleve->user->nom ?? '' }}</td>
+                                                     <td>{{ $eleve->user->prenom ?? '' }}</td>
+                                                     @foreach (['interro1', 'interro2', 'interro3', 'devoir1', 'devoir2'] as $type)
+@@ -106,7 +119,6 @@
+                                                                 min="0" max="20" step="0.01"
+                                                                 value="{{ $existingNote ? number_format($existingNote->valeur, 2) : '' }}"
+                                                                 {{ $existingNote && $existingNote->is_locked ? 'disabled' : '' }}>
+-
+                                                         </td>
+                                                     @endforeach
+                                                 </tr>
+@@ -122,7 +134,8 @@ classe</td>
+                             </div>
+ 
+                             <div class="text-end mt-4">
+-                                <center><button type="submit"
++                                <center>
++                                    <button type="submit"
+                                         class="btn btn-primary btn-lg px-4 animate__animated animate__pulse"
+                                         style="max-width: 100%;">
+                                         <i class="fas fa-save me-2"></i> Enregistrer les notes
+diff --git a/resources/views/professeur/reclamations/create.blade.php b/resources/views/professeur/reclamations/create.blade.php
+new file mode 100644
+index 0000000..e676784
+--- /dev/null
++++ b/resources/views/professeur/reclamations/create.blade.php
+@@ -0,0 +1,107 @@
++@extends('layouts.app')
++
++@section('content')
++    <div class="container py-5">
++        <br><br><br>
++        <div class="card shadow-lg border-light">
++            <div class="card-header bg-primary text-white">
++                <h3 class="mb-0">
++                    <i class="fas fa-exclamation-circle me-2"></i>
++                    Nouvelle réclamation pour {{ $eleve->user->nom }} {{ $eleve->user->prenom }}
++                </h3>
++            </div>
++            <br>
++            @if ($errors->any())
++                <div class="alert alert-danger mt-4">
++                    <ul>
++                        @foreach ($errors->all() as $error)
++                            <li>{{ $error }}</li>
++                        @endforeach
++                    </ul>
++                </div>
++            @endif
++
++            @if (session('success'))
++                <div class="alert alert-success">
++                    {{ session('success') }}
++                </div>
++            @endif
++
++
++            <div class="card-body">
++                <form action="{{ route('reclamations.store') }}" method="POST">
++                    @csrf
++                    <input type="hidden" name="eleve_id" value="{{ $eleve->id }}">
++
++                    <!-- Matière -->
++                    <div class="mb-3 wow animate__animated animate__fadeIn animate__delay-0.5s">
++                        <label for="matiere_id" class="form-label">Matière concernée</label>
++                        <div class="input-group">
++                            <span class="input-group-text"><i class="fas fa-book"></i></span>
++                            <select class="form-select" name="matiere_id" id="matiere_id" required>
++                                @foreach ($matieres as $matiere)
++                                    <option value="{{ $matiere->id }}">{{ $matiere->nom }}</option>
++                                @endforeach
++                            </select>
++                        </div>
++                    </div>
++
++                    <!-- Période académique -->
++                    <div class="mb-3 wow animate__animated animate__fadeIn animate__delay-1s">
++                        <label for="periode_id" class="form-label">Période académique</label>
++                        <div class="input-group">
++                            <span class="input-group-text"><i class="fas fa-calendar-alt"></i></span>
++                            <select class="form-select" name="periode_id" id="periode_id" required>
++                                @foreach ($periodes as $periode)
++                                    <option value="{{ $periode->id }}">{{ $periode->nom }}</option>
++                                @endforeach
++                            </select>
++                        </div>
++                    </div>
++
++                    <!-- Type d'évaluation -->
++                    <div class="mb-3 wow animate__animated animate__fadeIn animate__delay-1s">
++                        <label for="type_evaluation" class="form-label">Type d'évaluation</label>
++                        <div class="input-group">
++                            <span class="input-group-text"><i class="fas fa-pen"></i></span>
++                            <select class="form-select" name="type_evaluation" id="type_evaluation" required>
++                                <option value="interro1">Interrogation 1</option>
++                                <option value="interro2">Interrogation 2</option>
++                                <option value="interro3">Interrogation 3</option>
++                                <option value="devoir1">Devoir 1</option>
++                                <option value="devoir2">Devoir 2</option>
++                            </select>
++                        </div>
++                    </div>
++
++                    <!-- Description de la réclamation -->
++                    <div class="mb-3 wow animate__animated animate__fadeIn animate__delay-2s">
++                        <label for="description" class="form-label">Description de la réclamation</label>
++                        <div class="input-group">
++                            <span class="input-group-text"><i class="fas fa-pencil-alt"></i></span>
++                            <textarea class="form-control" name="description" id="description" rows="5" required></textarea>
++                        </div>
++                        <small class="text-muted mt-2">Décrivez en détail la raison de votre demande de
++                            modification.</small>
++                    </div>
++
++                    <!-- Actions -->
++                    <div class="text-end mt-4 wow animate__animated animate__fadeIn animate__delay-2.5s">
++
++                           <a href="{{ route('professeur.dashboard') }}" class="btn btn-outline-dark me-md-2">
++                                    <i class="fas fa-tachometer-alt me-1"></i> Retour a l'acceuil
++                                </a>
++
++                        <a href="{{ url()->previous() }}" class="btn btn-secondary">
++                            <i class="fas fa-times"></i> Annuler
++                        </a>
++                        <button type="submit" class="btn btn-primary">
++                            <i class="fas fa-paper-plane"></i> Envoyer à l'administration
++                        </button>
++                    </div>
++                </form>
++            </div>
++        </div>
++    </div>
++
++@endsection
+diff --git a/resources/views/professeur/reclamations/suivi.blade.php b/resources/views/professeur/reclamations/suivi.blade.php
+new file mode 100644
+index 0000000..84c816a
+--- /dev/null
++++ b/resources/views/professeur/reclamations/suivi.blade.php
+@@ -0,0 +1,147 @@
++@extends('layouts.app')
++
++@section('content')
++    <div class="container py-5">
++        <br><br>
++        <div class="card shadow-lg">
++            <div class="card-header bg-primary text-white">
++                <h3 class="mb-0">
++                    <i class="fas fa-clipboard-list me-2"></i>
++                    Suivi des réclamations
++                </h3>
++            </div>
++
++            <div class="card-body">
++                @if ($reclamations->isEmpty())
++                    <div class="alert alert-info wow animate__animated animate__fadeIn animate__delay-0.5s">
++                        <i class="fas fa-info-circle me-2"></i>
++                        Vous n'avez aucune réclamation en cours.
++                    </div>
++                @else
++                    <div class="table-responsive wow animate__animated animate__fadeIn animate__delay-0.3s">
++                        <table class="table table-hover table-striped">
++                            <thead class="table-light">
++                                <tr>
++                                    <th>Date</th>
++                                    <th>Élève</th>
++                                    <th>Matière</th>
++                                    <th>Période</th>
++                                    <th>Évaluation</th>
++                                    <th>Statut</th>
++                                    <th>Actions</th>
++                                </tr>
++                            </thead>
++                            <tbody>
++                                @foreach ($reclamations as $reclamation)
++                                    <tr>
++                                        <td>{{ $reclamation->created_at->format('d/m/Y H:i') }}</td>
++                                        <td>{{ $reclamation->eleve->user->nom }} {{ $reclamation->eleve->user->prenom }}
++                                        </td>
++                                        <td>{{ $reclamation->matiere->nom }}</td>
++                                        <td>{{ $reclamation->periode->nom }}</td>
++                                        <td>{{ ucfirst($reclamation->type_evaluation) }}
++                                            ({{ $reclamation->note->nom_evaluation ?? 'N/A' }})</td>
++                                        <td>
++                                            <span
++                                                class="badge bg-{{ $reclamation->statut == 'resolue' ? 'success' : ($reclamation->statut == 'rejetee' ? 'danger' : 'warning') }}">
++                                                {{ ucfirst(str_replace('_', ' ', $reclamation->statut)) }}
++                                            </span>
++                                        </td>
++                                        <td>
++                                            <button class="btn btn-sm btn-info" data-bs-toggle="modal"
++                                                data-bs-target="#detailsModal{{ $reclamation->id }}">
++                                                <i class="fas fa-eye"></i> Détails
++                                            </button>
++
++                                        </td>
++                                    </tr>
++                                @endforeach
++                            </tbody>
++                        </table>
++
++                        <a href="{{ url()->previous() }}" class="btn btn-secondary">
++                            <i class="fas fa-times"></i> Retour
++                        </a>
++                    </div>
++
++                    <!-- Modals en dehors de la table -->
++                    @foreach ($reclamations as $reclamation)
++                        <div class="modal fade wow animate__animated animate__fadeIn animate__delay-1.5s"
++                            id="detailsModal{{ $reclamation->id }}" tabindex="-1" aria-hidden="true">
++                            <div class="modal-dialog modal-lg">
++                                <div class="modal-content">
++                                    <div class="modal-header bg-info text-white">
++                                        <h5 class="modal-title">Détails de la réclamation -
++                                            {{ $reclamation->eleve->user->nom }} {{ $reclamation->eleve->user->prenom }}
++                                        </h5>
++                                        <button type="button" class="btn-close" data-bs-dismiss="modal"
++                                            aria-label="Close"></button>
++                                    </div>
++                                    <div class="modal-body">
++                                        <div class="mb-3">
++                                            <h6>Description :</h6>
++                                            <p>{{ $reclamation->description }}</p>
++                                        </div>
++
++                                        @if ($reclamation->reponse_admin)
++                                            <div class="mb-3">
++                                                <h6>Réponse de l'administration :</h6>
++                                                <div class="p-3 bg-light rounded">
++                                                    <p>{{ $reclamation->reponse_admin }}</p>
++                                                </div>
++                                            </div>
++                                        @endif
++
++                                        <div class="row">
++                                            <div class="col-md-6">
++                                                <h6>Informations :</h6>
++                                                <ul class="list-group">
++                                                    <li class="list-group-item">
++                                                        <strong>Date création :</strong>
++                                                        {{ $reclamation->created_at->format('d/m/Y H:i') }}
++                                                    </li>
++                                                    <li class="list-group-item">
++                                                        <strong>Dernière mise à jour :</strong>
++                                                        {{ $reclamation->updated_at->format('d/m/Y H:i') }}
++                                                    </li>
++                                                    <li class="list-group-item">
++                                                        <strong>Statut :</strong>
++                                                        <span
++                                                            class="badge bg-{{ $reclamation->statut == 'resolue' ? 'success' : ($reclamation->statut == 'rejetee' ? 'danger' : 'warning') }}">
++                                                            {{ ucfirst(str_replace('_', ' ', $reclamation->statut)) }}
++                                                        </span>
++                                                    </li>
++                                                </ul>
++                                            </div>
++                                            <div class="col-md-6">
++                                                <h6>Note concernée :</h6>
++                                                <div class="card">
++                                                    <div class="card-body">
++                                                        <p><strong>Valeur :</strong>
++                                                            {{ $reclamation->note->valeur ?? 'N/A' }}</p>
++                                                        <p><strong>Type :</strong> {{ $reclamation->type_evaluation }}</p>
++                                                        <p><strong>Statut :</strong>
++                                                            @if ($reclamation->note && $reclamation->note->is_locked)
++                                                                <span class="badge bg-danger">Verrouillée</span>
++                                                            @else
++                                                                <span class="badge bg-success">Déverrouillée</span>
++                                                            @endif
++                                                        </p>
++                                                    </div>
++                                                </div>
++                                            </div>
++                                        </div>
++                                    </div>
++                                    <div class="modal-footer">
++                                        <button type="button" class="btn btn-secondary"
++                                            data-bs-dismiss="modal">Fermer</button>
++                                    </div>
++                                </div>
++                            </div>
++                        </div>
++                    @endforeach
++                @endif
++            </div>
++        </div>
++    </div>
++@endsection
+diff --git a/resources/views/reclamations/confirmation.blade.php b/resources/views/reclamations/confirmation.blade.php
+new file mode 100644
+index 0000000..0511fd7
+--- /dev/null
++++ b/resources/views/reclamations/confirmation.blade.php
+@@ -0,0 +1,13 @@
++@extends('layouts.app')
++
++@section('content')
++<div class="container py-5 text-center">
++    <div class="alert alert-success">
++        <h4 class="mb-3">Réclamation envoyée avec succès !</h4>
++        <p>Votre réclamation a bien été enregistrée. Vous recevrez une réponse sous peu.</p>
++        <a href="{{ route('reclamations.index') }}" class="btn btn-primary mt-3">
++            <i class="fas fa-list me-1"></i> Voir mes réclamations
++        </a>
++    </div>
++</div>
++@endsection
+diff --git a/resources/views/reclamations/create.blade.php b/resources/views/reclamations/create.blade.php
+index 9f26870..7b339c9 100644
+--- a/resources/views/reclamations/create.blade.php
++++ b/resources/views/reclamations/create.blade.php
+@@ -1,34 +1,154 @@
+ @extends('layouts.app')
+ 
+ @section('content')
+-<div class="container">
+-    <div class="card">
+-        <div class="card-header">
+-            <h3>Nouvelle Réclamation</h3>
+-        </div>
+-        <div class="card-body">
+-            <form method="POST" action="{{ route('reclamations.store') }}">
+-                @csrf
+-                
+-                <div class="mb-3">
+-                    <label for="note_id" class="form-label">Note concernée</label>
+-                    <select class="form-select" id="note_id" name="note_id" required>
+-                        @foreach($notes as $note)
+-                            <option value="{{ $note->id }}">
+-                                {{ $note->matiere->nom }} - {{ $note->valeur }}/20
+-                            </option>
+-                        @endforeach
+-                    </select>
++<div class="container py-5">
++    <div class="row justify-content-center">
++        <div class="col-md-8">
++            <div class="card shadow">
++                <div class="card-header bg-primary text-white">
++                    <h4 class="mb-0">Déposer une réclamation</h4>
+                 </div>
+ 
+-                <div class="mb-3">
+-                    <label for="message" class="form-label">Message</label>
+-                    <textarea class="form-control" id="message" name="message" rows="5" required></textarea>
+-                </div>
++                <div class="card-body">
++                    @if (session('success'))
++                        <div class="alert alert-success alert-dismissible fade show">
++                            {{ session('success') }}
++                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
++                        </div>
++                    @endif
++
++                    @if ($errors->any())
++                        <div class="alert alert-danger alert-dismissible fade show">
++                            <ul class="mb-0">
++                                @foreach ($errors->all() as $error)
++                                    <li>{{ $error }}</li>
++                                @endforeach
++                            </ul>
++                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
++                        </div>
++                    @endif
++
++                    <form method="POST" action="{{ route('reclamations.store', $bulletin) }}" id="reclamationForm">
++                        @csrf
++
++                        <div class="row">
++                            <div class="col-md-6 mb-3">
++                                <label for="matiere_id" class="form-label">Matière concernée <span class="text-danger">*</span></label>
++                                <select class="form-select" id="matiere_id" name="matiere_id" required>
++                                    <option value="">Sélectionnez une matière...</option>
++                                    @foreach ($matieres as $matiere)
++                                        <option value="{{ $matiere->id }}" @selected(old('matiere_id') == $matiere->id)>
++                                            {{ $matiere->nom }}
++                                        </option>
++                                    @endforeach
++                                </select>
++                            </div>
++
++                            <div class="col-md-6 mb-3">
++                                <label for="type_evaluation" class="form-label">Type d'évaluation <span class="text-danger">*</span></label>
++                                <select class="form-select @error('type_evaluation') is-invalid @enderror"
++                                        id="type_evaluation" name="type_evaluation" required>
++                                    <option value="">Sélectionnez un type...</option>
++                                    <option value="interro1" {{ old('type_evaluation') == 'interro1' ? 'selected' : '' }}>Interrogation 1</option>
++                                    <option value="interro2" {{ old('type_evaluation') == 'interro2' ? 'selected' : '' }}>Interrogation 2</option>
++                                    <option value="interro3" {{ old('type_evaluation') == 'interro3' ? 'selected' : '' }}>Interrogation 3</option>
++                                    <option value="devoir1" {{ old('type_evaluation') == 'devoir1' ? 'selected' : '' }}>Devoir 1</option>
++                                    <option value="devoir2" {{ old('type_evaluation') == 'devoir2' ? 'selected' : '' }}>Devoir 2</option>
++                                </select>
++                                @error('type_evaluation')
++                                    <div class="invalid-feedback">{{ $message }}</div>
++                                @enderror
++                            </div>
++                        </div>
++
++                        <div class="row">
++                            <div class="col-md-6 mb-3">
++                                <label for="periode_id" class="form-label">Période <span class="text-danger">*</span></label>
++                                <select class="form-select" id="periode_id" name="periode_id" required>
++                                    <option value="">Sélectionnez une période...</option>
++                                    @foreach ($periodes as $periode)
++                                        <option value="{{ $periode->id }}" @selected(old('periode_id') == $periode->id)>
++                                            {{ $periode->nom }}
++                                        </option>
++                                    @endforeach
++                                </select>
++                            </div>
++
++                            <div class="col-md-6 mb-3">
++                                <label for="annee_academique_id" class="form-label">Année académique <span class="text-danger">*</span></label>
++                                <select class="form-select" id="annee_academique_id" name="annee_academique_id" required>
++                                    <option value="">Sélectionnez une année...</option>
++                                    @foreach ($annees as $annee)
++                                        <option value="{{ $annee->id }}" @selected(old('annee_academique_id') == $annee->id)>
++                                            {{ $annee->libelle }}
++                                        </option>
++                                    @endforeach
++                                </select>
++                            </div>
++                        </div>
+ 
+-                <button type="submit" class="btn btn-primary">Envoyer la réclamation</button>
+-            </form>
++                        <div class="mb-3">
++                            <label for="type" class="form-label">Type de réclamation <span class="text-danger">*</span></label>
++                            <select class="form-select" id="type" name="type" required>
++                                <option value="">Sélectionnez un type...</option>
++                                <option value="omission" @selected(old('type') == 'omission')>Note manquante</option>
++                                <option value="erreur_saisie" @selected(old('type') == 'erreur_saisie')>Erreur de saisie</option>
++                                <option value="autre" @selected(old('type') == 'autre')>Autre problème</option>
++                            </select>
++                        </div>
++
++                        <div class="mb-3">
++                            <label for="description" class="form-label">Description détaillée <span class="text-danger">*</span></label>
++                            <textarea class="form-control" id="description" name="description" rows="5" required>{{ old('description') }}</textarea>
++                        </div>
++
++                        <div class="d-grid gap-2 d-md-flex justify-content-md-end">
++                            <button type="submit" class="btn btn-primary" id="submitBtn">
++                                <i class="fas fa-paper-plane me-1"></i> Envoyer la réclamation
++                            </button>
++                        </div>
++                    </form>
++                </div>
++            </div>
+         </div>
+     </div>
+ </div>
+-@endsection
+\ No newline at end of file
++@endsection
++
++@section('scripts')
++<script>
++document.addEventListener('DOMContentLoaded', function() {
++    const form = document.getElementById('reclamationForm');
++
++    form.addEventListener('submit', function(e) {
++        e.preventDefault();
++
++        const submitBtn = document.getElementById('submitBtn');
++        submitBtn.disabled = true;
++        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Envoi en cours...';
++
++        fetch(form.action, {
++            method: 'POST',
++            body: new FormData(form),
++            headers: {
++                'X-Requested-With': 'XMLHttpRequest',
++                'Accept': 'application/json'
++            }
++        })
++        .then(response => response.json())
++        .then(data => {
++            if (data.redirect) {
++                window.location.href = data.redirect;
++            } else {
++                alert('Réclamation enregistrée.');
++            }
++        })
++        .catch(error => {
++            console.error('Erreur lors de l\'envoi :', error);
++            submitBtn.disabled = false;
++            submitBtn.innerHTML = '<i class="fas fa-paper-plane me-1"></i> Envoyer la réclamation';
++        });
++    });
++});
++</script>
++@endsection
+diff --git a/resources/views/reclamations/index.blade.php b/resources/views/reclamations/index.blade.php
+index 683f635..6977dae 100644
+--- a/resources/views/reclamations/index.blade.php
++++ b/resources/views/reclamations/index.blade.php
+@@ -1,39 +1,192 @@
+ @extends('layouts.app')
+ 
+ @section('content')
+-<div class="container">
+-    <h2>Réclamations</h2>
+-    
+-    <div class="list-group">
+-        @foreach($reclamations as $reclamation)
+-            <div class="list-group-item">
+-                <div class="d-flex justify-content-between">
+-                    <h5>{{ $reclamation->eleve->user->prenom }} {{ $reclamation->eleve->user->nom }}</h5>
+-                    <span class="badge bg-{{ $reclamation->statut == 'en_attente' ? 'warning' : ($reclamation->statut == 'traitee' ? 'success' : 'danger') }}">
+-                        {{ ucfirst(str_replace('_', ' ', $reclamation->statut)) }}
+-                    </span>
++<div class="container py-4">
++    <h3 class="mb-4">Réclamations reçues</h3>
++
++    @if(session('success'))
++        <div class="alert alert-success alert-dismissible fade show mb-4">
++            {{ session('success') }}
++            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
++        </div>
++    @endif
++
++    @if($reclamations->isEmpty())
++        <div class="alert alert-info">
++            Aucune réclamation trouvée.
++        </div>
++    @else
++        <div class="card shadow">
++            <div class="card-body">
++                <div class="table-responsive">
++                    <table class="table table-hover">
++                        <thead class="table-light">
++                            <tr>
++                                <th>Élève</th>
++                                <th>Matière</th>
++                                <th>Type</th>
++                                <th>Date</th>
++                                <th>Statut</th>
++                                <th>Actions</th>
++                            </tr>
++                        </thead>
++                        <tbody>
++                            @foreach($reclamations as $reclamation)
++                            <tr>
++                                <td>{{ $reclamation->eleve->user->nom }} {{ $reclamation->eleve->user->prenom }}</td>
++                                <td>{{ $reclamation->matiere->nom }}</td>
++                                <td>{{ ucfirst(str_replace('_', ' ', $reclamation->type)) }}</td>
++                                <td>{{ $reclamation->created_at->format('d/m/Y H:i') }}</td>
++                                <td>
++                                    <span class="badge bg-{{
++                                        $reclamation->statut == 'resolue' ? 'success' :
++                                        ($reclamation->statut == 'rejetee' ? 'danger' :
++                                        ($reclamation->statut == 'nouvelle_admin' ? 'primary' : 'warning'))
++                                    }}">
++                                        {{ ucfirst(str_replace('_', ' ', $reclamation->statut)) }}
++                                    </span>
++                                </td>
++                                <td>
++                                    <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal"
++                                       data-bs-target="#reclamationModal{{ $reclamation->id }}">
++                                        <i class="fas fa-eye"></i> Traiter
++                                    </button>
++                                </td>
++                            </tr>
++                            @endforeach
++                        </tbody>
++                    </table>
+                 </div>
+-                <p><strong>Matière:</strong> {{ $reclamation->matiere->nom }}</p>
+-                <p><strong>Note concernée:</strong> {{ $reclamation->note->valeur }}/20</p>
+-                <p><strong>Message:</strong> {{ $reclamation->message }}</p>
+-                
+-                @if($reclamation->statut == 'en_attente')
+-                    <form method="POST" action="{{ route('reclamations.traiter', $reclamation) }}">
+-                        @csrf @method('PUT')
+-                        <div class="mb-3">
+-                            <label>Réponse</label>
+-                            <textarea name="reponse" class="form-control"></textarea>
++            </div>
++        </div>
++    @endif
++</div>
++
++<!-- Modals -->
++@foreach($reclamations as $reclamation)
++<div class="modal fade" id="reclamationModal{{ $reclamation->id }}" tabindex="-1" aria-hidden="true">
++    <div class="modal-dialog modal-lg">
++        <div class="modal-content">
++            <div class="modal-header bg-primary text-white">
++                <h5 class="modal-title">Détails de la réclamation #{{ $reclamation->id }}</h5>
++                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
++            </div>
++            <div class="modal-body">
++                <div class="mb-4">
++                    <h6>Informations de base</h6>
++                    <hr>
++                    <div class="row">
++                        <div class="col-md-6">
++                            <p><strong>Élève :</strong> {{ $reclamation->eleve->user->nom }} {{ $reclamation->eleve->user->prenom }}</p>
++                            <p><strong>Classe :</strong> {{ $reclamation->eleve->classe->nom ?? 'Non spécifié' }}</p>
+                         </div>
+-                        <button type="submit" name="statut" value="traitee" class="btn btn-success">Accepter</button>
+-                        <button type="submit" name="statut" value="rejetee" class="btn btn-danger">Rejeter</button>
+-                    </form>
+-                @else
+-                    <p><strong>Réponse:</strong> {{ $reclamation->reponse }}</p>
++                        <div class="col-md-6">
++                            <p><strong>Matière :</strong> {{ $reclamation->matiere->nom }}</p>
++                            <p><strong>Période :</strong> {{ $reclamation->periode->nom }}</p>
++                        </div>
++                    </div>
++                </div>
++
++                <div class="mb-4">
++                    <h6>Détails de la réclamation</h6>
++                    <hr>
++                    <p><strong>Type :</strong> {{ ucfirst(str_replace('_', ' ', $reclamation->type)) }}</p>
++                    <p><strong>Type d'évaluation :</strong> {{ $reclamation->type_evaluation }}</p>
++                    <p><strong>Description :</strong></p>
++                    <div class="border p-3 bg-light rounded">
++                        {{ $reclamation->description }}
++                    </div>
++                </div>
++
++                @if($reclamation->note)
++                <div class="mb-4">
++                    <h6>Détails de la note</h6>
++                    <hr>
++                    <p><strong>Note actuelle :</strong> {{ $reclamation->note->valeur }}</p>
++                    <p><strong>Type :</strong> {{ $reclamation->note->type_evaluation }}</p>
++                    <p><strong>Nom :</strong> {{ $reclamation->note->nom_evaluation }}</p>
++                </div>
+                 @endif
++
++                <form method="POST" action="{{ route('reclamations.profResponse', $reclamation) }}">
++                    @csrf
++                    <div class="mb-3">
++                        <label class="form-label">Type de réponse</label>
++                        <div class="form-check">
++                            <input class="form-check-input" type="radio" name="response_type"
++                                   id="directResponse{{ $reclamation->id }}" value="direct" checked>
++                            <label class="form-check-label" for="directResponse{{ $reclamation->id }}">
++                                Réponse directe à l'élève
++                            </label>
++                        </div>
++                        <div class="form-check">
++                            <input class="form-check-input" type="radio" name="response_type"
++                                   id="adminRequest{{ $reclamation->id }}" value="admin_request">
++                            <label class="form-check-label" for="adminRequest{{ $reclamation->id }}">
++                                Demande de modification à l'admin
++                            </label>
++                        </div>
++                    </div>
++
++                    <div class="mb-3" id="responseMessageContainer{{ $reclamation->id }}">
++                        <label for="response_message{{ $reclamation->id }}" class="form-label">Message</label>
++                        <textarea name="response_message" id="response_message{{ $reclamation->id }}"
++                                  class="form-control" rows="4" required></textarea>
++                    </div>
++
++                    <div class="mb-3 d-none" id="newNoteContainer{{ $reclamation->id }}">
++                        <label for="proposed_new_note{{ $reclamation->id }}" class="form-label">Nouvelle note proposée</label>
++                        <input type="number" step="0.01" min="0" max="20"
++                               name="proposed_new_note" id="proposed_new_note{{ $reclamation->id }}"
++                               class="form-control" value="{{ $reclamation->note->valeur ?? '' }}">
++                    </div>
++
++                    <div class="text-end">
++                        <button type="button" class="btn btn-secondary me-2" data-bs-dismiss="modal">Fermer</button>
++                        <button type="submit" class="btn btn-primary">
++                            <i class="fas fa-paper-plane me-1"></i> Envoyer la réponse
++                        </button>
++                    </div>
++                </form>
+             </div>
+-        @endforeach
++        </div>
+     </div>
+-
+-    {{ $reclamations->links() }}
+ </div>
+-@endsection
+\ No newline at end of file
++@endforeach
++
++@push('scripts')
++<script>
++    document.addEventListener('DOMContentLoaded', function() {
++        // Gestion de l'affichage des champs en fonction du type de réponse
++        const setupModal = (modalId) => {
++            const modal = document.getElementById(modalId);
++            if (!modal) return;
++
++            const directResponse = modal.querySelector('input[value="direct"]');
++            const adminRequest = modal.querySelector('input[value="admin_request"]');
++            const newNoteContainer = modal.querySelector('#newNoteContainer' + modalId.replace('reclamationModal', ''));
++            const responseMessageContainer = modal.querySelector('#responseMessageContainer' + modalId.replace('reclamationModal', ''));
++
++            const toggleFields = () => {
++                if (directResponse.checked) {
++                    newNoteContainer.classList.add('d-none');
++                    responseMessageContainer.querySelector('label').textContent = 'Réponse à l\'élève';
++                } else {
++                    newNoteContainer.classList.remove('d-none');
++                    responseMessageContainer.querySelector('label').textContent = 'Justification pour l\'admin';
++                }
++            };
++
++            directResponse.addEventListener('change', toggleFields);
++            adminRequest.addEventListener('change', toggleFields);
++            toggleFields();
++        };
++
++        // Initialiser chaque modal
++        @foreach($reclamations as $reclamation)
++        setupModal('reclamationModal{{ $reclamation->id }}');
++        @endforeach
++    });
++</script>
++@endpush
++@endsection
+diff --git a/resources/views/reclamations/professeur.blade.php b/resources/views/reclamations/professeur.blade.php
+new file mode 100644
+index 0000000..b626b16
+--- /dev/null
++++ b/resources/views/reclamations/professeur.blade.php
+@@ -0,0 +1,25 @@
++@extends('layouts.app')
++
++@section('content')
++
++<div class="container">
++
++    <h3>Réclamations reçues</h3>
++    @forelse ($reclamations as $reclamation)
++
++        <div class="card my-3">
++               <br><br>   <br><br>
++            <div class="card-body">
++                <p><strong>Élève :</strong> {{ $reclamation->eleve->user->name }}</p>
++                <p><strong>Matière :</strong> {{ $reclamation->matiere->nom }}</p>
++                <p><strong>Période :</strong> {{ $reclamation->periode->nom ?? '-' }}</p>
++                <p><strong>Type :</strong> {{ $reclamation->type }}</p>
++                <p><strong>Description :</strong> {{ $reclamation->description }}</p>
++                <p><strong>Statut :</strong> {{ $reclamation->statut }}</p>
++            </div>
++        </div>
++    @empty
++        <p>Aucune réclamation trouvée.</p>
++    @endforelse
++</div>
++@endsection
+diff --git a/resources/views/vendor/notifications/email.blade.php b/resources/views/vendor/notifications/email.blade.php
+new file mode 100644
+index 0000000..79c2408
+--- /dev/null
++++ b/resources/views/vendor/notifications/email.blade.php
+@@ -0,0 +1,58 @@
++<x-mail::message>
++{{-- Greeting --}}
++@if (! empty($greeting))
++# {{ $greeting }}
++@else
++@if ($level === 'error')
++# @lang('Whoops!')
++@else
++# @lang('Hello!')
++@endif
++@endif
++
++{{-- Intro Lines --}}
++@foreach ($introLines as $line)
++{{ $line }}
++
++@endforeach
++
++{{-- Action Button --}}
++@isset($actionText)
++<?php
++    $color = match ($level) {
++        'success', 'error' => $level,
++        default => 'primary',
++    };
++?>
++<x-mail::button :url="$actionUrl" :color="$color">
++{{ $actionText }}
++</x-mail::button>
++@endisset
++
++{{-- Outro Lines --}}
++@foreach ($outroLines as $line)
++{{ $line }}
++
++@endforeach
++
++{{-- Salutation --}}
++@if (! empty($salutation))
++{{ $salutation }}
++@else
++@lang('Regards,')<br>
++{{ config('app.name') }}
++@endif
++
++{{-- Subcopy --}}
++@isset($actionText)
++<x-slot:subcopy>
++@lang(
++    "If you're having trouble clicking the \":actionText\" button, copy and paste the URL below\n".
++    'into your web browser:',
++    [
++        'actionText' => $actionText,
++    ]
++) <span class="break-all">[{{ $displayableActionUrl }}]({{ $actionUrl }})</span>
++</x-slot:subcopy>
++@endisset
++</x-mail::message>
+diff --git a/routes/web.php b/routes/web.php
+index 2c07f55..cf98a10 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -6,9 +6,9 @@
+ use App\Http\Controllers\Auth\RegisterController;
+ use App\Http\Controllers\BulletinController;
+ use App\Http\Controllers\ClasseController;
+-use App\Http\Controllers\ClassController;
+ use App\Http\Controllers\HomeController;
+ use App\Http\Controllers\ProfesseurController;
++use App\Http\Controllers\ReclamationController;
+ use App\Http\Controllers\UserController;
+ use Illuminate\Support\Facades\Route;
+ 
+@@ -88,6 +88,12 @@
+         Route::get('/resultats', [AdminController::class, 'showResultats'])->name('resultats');
+         Route::get('/resultats/{anneeId}', [AdminController::class, 'showClassesForAnnee'])->name('resultats.classes');
+         Route::get('/resultats/{anneeId}/{classeId}', [AdminController::class, 'showElevesForResultats'])->name('resultats.eleves');
++
++          // Routes pour les réclamations admin
++        Route::prefix('reclamations')->group(function () {
++            Route::get('/', [ReclamationController::class, 'adminIndex'])->name('reclamations.admin');
++            Route::post('/unlock/{reclamation}', [ReclamationController::class, 'unlockNote'])->name('reclamations.unlock');
++        });
+     });
+ 
+     // Ressources principales
+@@ -121,12 +127,15 @@
+     Route::put('/profile/updateadmin', [UserController::class, 'adminupdateProfile'])->name('profile.admin.update');
+     Route::get('/profile/editeleve', [BulletinController::class, 'editProfileleve'])->name('profile.editeleve');
+ 
+-    Route::get('/test-email', function() {
+-    Mail::raw('Test email', function($message) {
+-        $message->to('votre@email.com')->subject('Test');
++    // Routes pour les réclamations
++    Route::prefix('reclamations')->group(function () {
++        Route::get('/', [ReclamationController::class, 'professeurIndex'])->name('reclamations.professeur');
++        Route::get('/create/{eleve}', [ReclamationController::class, 'create'])->name('reclamations.create');
++        Route::post('/store', [ReclamationController::class, 'store'])->name('reclamations.store');
++        Route::get('professeur/reclamations/suivi/{eleve_id?}', [ReclamationController::class, 'suiviReclamations'])->name('reclamations.suivi');
++
+     });
+-    return 'Email sent';
+-});
++
+ });
+ 
+ // Auth Laravel
+-- 
+2.34.1
+

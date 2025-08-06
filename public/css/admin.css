@@ -1,0 +1,89 @@
+/* Admin Dashboard Styles */
+.admin-dashboard {
+    background-color: #f8f9fa;
+    min-height: 100vh;
+}
+
+.sidebar {
+    width: 250px;
+    min-height: 100vh;
+    transition: all 0.3s;
+    position: fixed;
+    z-index: 1000;
+}
+
+.sidebar .nav-link {
+    color: rgba(255, 255, 255, 0.8);
+    padding: 12px 20px;
+    border-left: 3px solid transparent;
+    transition: all 0.3s;
+}
+
+.sidebar .nav-link:hover {
+    color: white;
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.sidebar .nav-link.active {
+    color: white;
+    background-color: rgba(255, 255, 255, 0.2);
+    border-left: 3px solid #0d6efd;
+}
+
+.sidebar .dropdown-menu {
+    background-color: #343a40;
+    border: none;
+}
+
+.sidebar .dropdown-item {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.sidebar .dropdown-item:hover {
+    color: white;
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.main-content {
+    margin-left: 250px;
+    transition: all 0.3s;
+}
+
+@media (max-width: 768px) {
+    .sidebar {
+        margin-left: -250px;
+    }
+    .sidebar.show {
+        margin-left: 0;
+    }
+    .main-content {
+        margin-left: 0;
+    }
+}
+
+.dashboard-card {
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s;
+}
+
+.dashboard-card:hover {
+    transform: translateY(-5px);
+}
+
+.card-icon {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+}
+
+.user-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.action-btns .btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+}

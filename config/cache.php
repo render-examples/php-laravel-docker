@@ -39,12 +39,13 @@ return [
 
         'array' => [
             'driver' => 'array',
+            'serialize' => false,
         ],
 
         'database' => [
             'driver' => 'database',
-            'table' => 'cache',
-            'connection' => null,
+            'table' => env('DB_CACHE_TABLE', 'cache'),
+            'connection' => env('DB_CACHE_CONNECTION', null),
         ],
 
         'file' => [
@@ -73,7 +74,7 @@ return [
 
         'redis' => [
             'driver' => 'redis',
-            'connection' => 'cache',
+            'connection' => env('REDIS_CACHE_CONNECTION', 'cache'),
         ],
 
         'dynamodb' => [

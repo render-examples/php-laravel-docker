@@ -1,2 +1,8 @@
-*
-!.gitignore
+/vendor
+/node_modules
+/public/storage
+/storage/*.key
+/.env
+/.idea
+/.vscode
+.DS_Store

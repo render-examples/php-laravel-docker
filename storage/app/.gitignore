@@ -1,3 +1,7 @@
 *
+<<<<<<< HEAD
+!private/
+=======
+>>>>>>> origin/master
 !public/
 !.gitignore
