@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Add LPG Cylinder</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        #qr-reader {
+            width: 100%;
+            max-width: 600px;
+            margin: auto;
+        }
+        @media (max-width: 600px) {
+            #qr-reader {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+  
+<body>
+    <img src="/customer/logos/makeen_logo.png" alt="MAKEEN ENERGY LOGO"
+    width="350" 
+    height="100"> 
+    <h1>New LPG Cylinder</h1>
+    <div id="qr-reader"></div>
+    <div id="qr-reader-results"></div>
+    <!-- <script src="https://unpkg.com/html5-qrcode"></script>-->
+    <script src="../scripts/html5-qrcode.js"></script>
+    <script src="../scripts/script.js"></script>
+  
+    <p></p>
+    
+    <form action="submit.php" method="POST">
+        
+        <label id="scanner_QR">Tag information:</label><br>
+        <input id="tag_txt_value" type="text" name="tag" size="40" readonly required value=""><br><br>
+         
+        <label id="code">QR Code:</label><br>
+        <input id="serial_qr_code" type="text" name="qrcode" readonly required value="">
+        <button onclick="updateLastElement()">Get QR code</button><br><br>
+
+        <label for="serial">Serial:</label><br>
+        <input type="text" name="serial" required><br><br>
+
+        <label for="brand">Brand:</label><br>
+        <input type="text" name="brand" required><br><br>
+
+        <label for="year">Manufacture Year:</label><br>
+        <input type="number" name="year" required><br><br>
+
+        <label for="year_insp">Inspection Year:</label><br>
+        <input type="number" name="year_insp" required><br><br>
+
+        <label for="tare">Tare:</label><br>
+        <input type="number" name="tare" required><br><br>
+
+        <label for="net">Net:</label><br>
+        <input type="number" name="net" required><br><br>
+
+        <label for="type">Type:</label><br>
+        <input type="number" name="type" required><br><br>
+
+        <label for="gas">Gas:</label><br>
+        <input type="number" name="gas" required><br><br>
+
+        <label for="valve">Valve:</label><br>
+        <input type="number" name="valve" required><br><br>
+
+        <label for="owner">Owner:</label><br>
+        <input type="number" name="owner" required><br><br>
+
+        <label for="device">Device:</label><br>
+        <input type="text" name="device" required><br><br>
+
+        <label for="operator">Operator:</label><br>
+        <input type="test" name="operator" required><br><br>
+   
+        <input type="submit" value="Add Cylinder">
+    </form>
+     
+    <script>
+    function updateLastElement(){
+    let text = document.getElementById("tag_txt_value").value.trim();
+    let parts = text.split("?id=");
+    let last = parts.length > 0 ? parts[parts.length - 1 ] : "not found";
+    document.getElementById("serial_qr_code").value = last;
+    }
+    </script>
+
+    <br><a href="cyl_list.php">View All LPG Cylinders</a>
+</body>
+</html>
