@@ -1,22 +1,167 @@
-# Laravel 11 with a Docker PHP Image
+# Mini ERP System
 
-A demo repo for deploying a Laravel PHP application on [Render](https://render.com) using Docker. You can follow the getting started tutorial [here](https://render.com/docs/deploy-php-laravel-docker).
+A lightweight ERP system for Sales and Inventory Management.
 
+Built with Laravel 11, PostgreSQL, and Docker.
 
-## Deployment
+## Tech Stack
 
-1. [Create](https://dashboard.render.com/new/database) a new PostgreSQL database on Render and copy the internal DB URL to use below.
+* Laravel 11
+* PostgreSQL
+* Docker Compose
+* Bootstrap 5
+* Chart.js
 
-2. Fork this repo to your own GitHub account.
+---
 
-3. Create a new **Web Service** on Render, and give Render's GitHub app permission to access your new repo.
+## Dashboard
 
-4. Select `Docker` for the environment, and add the following environment variable under the *Advanced* section:
+> Dashboard Screenshot Here
 
-   | Key             | Value           |
-   | --------------- | --------------- |
-   | `APP_KEY`  | Copy the output of `php artisan key:generate --show` |
-   | `DATABASE_URL`  | The **internal database url** for the database you created above. |
-   | `DB_CONNECTION`  | `pgsql` |
+![Dashboard](docs/images/dashboard.png)
 
-That's it! Your Laravel 11 app will be live on your Render URL as soon as the build finishes. You can test it out by registering and logging in.
+---
+
+## Order Workflow
+
+```mermaid
+flowchart TD
+
+A["Create Order"]
+--> B["Pending Approval"]
+
+B --> C["Approved"]
+
+C --> D["Ship Order"]
+
+D --> E["Reduce Inventory"]
+
+E --> F["Create Stock Movement"]
+```
+
+---
+
+## Sample Sales Order
+
+| Field     | Value     |
+| --------- | --------- |
+| Order No. | SO0001    |
+| Customer  | Company A |
+| Status    | Approved  |
+| Total     | 60,000    |
+
+### Order Items
+
+| Product | Qty | Unit Price | Subtotal |
+| ------- | --- | ---------- | -------- |
+| Laptop  | 2   | 30,000     | 60,000   |
+
+---
+
+## Stock Movement Example
+
+| Date       | Product | Type | Qty | Balance | Reference |
+| ---------- | ------- | ---- | --- | ------- | --------- |
+| 2026-06-24 | Laptop  | OUT  | -2  | 18      | SO0001    |
+
+---
+
+## Modules
+
+### Sales Order Module
+
+* Create sales orders
+* Order approval workflow
+* Order status management
+
+### Inventory Module
+
+* Inventory tracking
+* Automatic stock deduction
+* Stock movement history
+
+### Dashboard Module
+
+* Revenue statistics
+* Order statistics
+* Inventory overview
+
+---
+
+## Database ER Diagram
+
+> ER Diagram Screenshot Here
+
+![ERD](docs/images/erd.png)
+
+---
+
+## System Architecture
+
+```text
+Browser
+   │
+   ▼
+Laravel Application
+   │
+   ├── Controllers
+   ├── Services
+   ├── Models
+   └── Repositories
+   │
+   ▼
+PostgreSQL
+```
+
+### Docker Environment
+
+```text
+Docker
+├── nginx
+├── php-fpm
+└── postgres
+```
+
+---
+
+## Technical Highlights
+
+* Transaction handling for inventory consistency
+* Service Layer architecture
+* Approval workflow implementation
+* Dockerized development environment
+* Dashboard analytics with Chart.js
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/your-account/mini-erp.git
+
+cd mini-erp
+
+cp .env.example .env
+
+docker compose up -d
+
+docker compose exec app composer install
+
+docker compose exec app php artisan key:generate
+
+docker compose exec app php artisan migrate --seed
+```
+
+---
+
+## Project Goals
+
+This project simulates a lightweight ERP system focusing on sales and inventory workflows.
+
+Key business scenarios include:
+
+* Sales order management
+* Approval workflow
+* Inventory deduction
+* Stock movement tracking
+* Dashboard reporting

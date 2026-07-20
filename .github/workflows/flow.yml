@@ -1,0 +1,13 @@
+            ┌────────────┐
+            │   Push     │
+            │   to Git   │
+            └────┬───────┘
+                 │
+      ┌──────────▼──────────┐
+      │      GitHub         │
+      │  自動觸發兩件事：     │
+      │                      │
+      │ 1. CI: ci.yml 執行   │─→ 測試 Laravel + DB
+      │                      │
+      │ 2. CD: deploy.yml     │─→ curl Deploy Hook URL → Render 開始部署
+      └─────────────────────┘

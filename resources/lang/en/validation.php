@@ -145,6 +145,8 @@ return [
     |
     */
 
-    'attributes' => [],
-
+    'attributes' => [
+        'product_row' => 'Product of row :row',
+        'quantity_row' => 'Quantity of row :row',
+    ],
 ];
